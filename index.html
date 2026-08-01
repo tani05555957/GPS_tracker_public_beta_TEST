@@ -2073,16 +2073,17 @@
       const toggleClass = allOn ? 'on' : someOn ? 'partial' : '';
       const color = group.devices[0]?.color || '#888';
       const multi = group.devices.length > 1;
-      const expanded = multi && !!groupExpanded[gi];
-      const arrow = multi ? `<span style="font-size:9px;opacity:0.55;margin-left:3px">${expanded ? '▴' : '▾'}</span>` : '';
       const soleNoData = !multi && group.devices[0]?.noData;
+      const expandable = multi || !soleNoData;
+      const expanded = expandable && !!groupExpanded[gi];
+      const arrow = expandable ? `<span style="font-size:9px;opacity:0.55;margin-left:3px">${expanded ? '▴' : '▾'}</span>` : '';
       const card = document.createElement('div');
       card.className = 'device-card' + (someOn ? ' active' : '');
       card.style.setProperty('--card-color', color);
       card.innerHTML = `
       <div class="device-header">
         <div class="device-dot"></div>
-        <div class="device-name${multi ? ' device-name-expandable' : ''}"${multi ? ` onclick="toggleGroupExpand(${gi})"` : ''}>${group.company ? `<span style="opacity:0.65;margin-right:4px">${group.company}</span>` : ''}${group.model}${arrow}</div>
+        <div class="device-name${expandable ? ' device-name-expandable' : ''}"${expandable ? ` onclick="toggleGroupExpand(${gi})"` : ''}>${group.company ? `<span style="opacity:0.65;margin-right:4px">${group.company}</span>` : ''}${group.model}${arrow}</div>
         ${soleNoData ? '<span class="nodata-badge">データなし</span>' : ''}
         <div class="device-toggle ${toggleClass}" onclick="handleGroupToggle(${gi})"></div>
       </div>`;
