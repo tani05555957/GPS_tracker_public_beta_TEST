@@ -1330,6 +1330,7 @@
     let GROUPS = [];
     let GPX_DATA = {};   // key → [[lat, lon, timeMs], ...]
     let GPX_SPEEDS = {};   // key → Float32Array (各セグメントのkm/h)
+    let GPX_AVG_SPEED = {};   // key → 平均速度(km/h) or null。読み込み時に事前計算し、サイドバー展開時は表示のみ行う
     let speedPolylines = {}; // key → L.polyline[N_BUCKETS]
     let startMarkers = {};
     let endMarkers = {};
@@ -2101,7 +2102,7 @@
           if (_ms) {
             const _d = new Date(_ms), _z = n => String(n).padStart(2, '0');
             let _label = `${_z(_d.getMonth() + 1)}/${_z(_d.getDate())} ${_z(_d.getHours())}:${_z(_d.getMinutes())}`;
-            const _avgSpeed = computeTrajectoryAvgSpeed(_c0);
+            const _avgSpeed = GPX_AVG_SPEED[dev.key];
             if (_avgSpeed != null) _label += `　平均${_avgSpeed.toFixed(1)}km/h`;
             fname.textContent = _label;
             fname.title = _label;
@@ -2520,6 +2521,7 @@
           });
           GPX_DATA[key] = it.coords;
           GPX_SPEEDS[key] = calcSpeeds(it.coords);
+          GPX_AVG_SPEED[key] = computeTrajectoryAvgSpeed(it.coords);
           visibility[key] = true;
         });
 
@@ -2553,7 +2555,7 @@
       if (!confirm('読み込んだ軌跡データをすべてクリアしますか？')) return;
 
       clearMapLayers();
-      DEVICES = []; GROUPS = []; GPX_DATA = {}; GPX_SPEEDS = {};
+      DEVICES = []; GROUPS = []; GPX_DATA = {}; GPX_SPEEDS = {}; GPX_AVG_SPEED = {};
       visibility = {}; filterText = ''; groupExpanded = {};
       modelColorMap = {}; nextColorIdx = 0; nextDeviceSeq = 0; loadedKeys = new Set();
 
@@ -4361,7 +4363,7 @@
     function resetAllStateForRestore() {
       csvFilterGeneration++; // 実行中のapplyCSVFilter()があれば中断させる
       clearMapLayers();
-      DEVICES = []; GROUPS = []; GPX_DATA = {}; GPX_SPEEDS = {};
+      DEVICES = []; GROUPS = []; GPX_DATA = {}; GPX_SPEEDS = {}; GPX_AVG_SPEED = {};
       visibility = {}; filterText = ''; groupExpanded = {};
       modelColorMap = {}; nextColorIdx = 0; nextDeviceSeq = 0; loadedKeys = new Set();
 
@@ -4433,6 +4435,7 @@
         for (let i = 0; i < DEVICES.length; i++) {
           const dev = DEVICES[i];
           GPX_SPEEDS[dev.key] = calcSpeeds(GPX_DATA[dev.key] || []);
+          GPX_AVG_SPEED[dev.key] = computeTrajectoryAvgSpeed(GPX_DATA[dev.key] || []);
           if (i % 10 === 0) await yieldToUI();
         }
         buildGroups();
