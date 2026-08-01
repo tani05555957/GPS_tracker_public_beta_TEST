@@ -1473,6 +1473,46 @@
       return stays;
     }
 
+    // サイドバー（端末番号トグル展開時）の軌跡ごとの平均速度表示用。
+    // 30km/h以上の移動区間と、30m以内に30分以上滞在した区間を除外して平均速度(km/h)を算出する
+    const AVG_SPEED_EXCLUDE_KMH = 30;
+    const AVG_SPEED_STAY_KM = 0.03;
+    const AVG_SPEED_STAY_MS = 30 * 60 * 1000;
+    function computeTrajectoryAvgSpeed(coords) {
+      if (!coords || coords.length < 2) return null;
+      const n = coords.length;
+      const inStay = new Uint8Array(n);
+      let i = 0;
+      while (i < n) {
+        const [baseLat, baseLon] = coords[i];
+        let end = i;
+        while (end + 1 < n &&
+          haversineKm(baseLat, baseLon, coords[end + 1][0], coords[end + 1][1]) < AVG_SPEED_STAY_KM) {
+          end++;
+        }
+        if (end > i && coords[end][2] - coords[i][2] >= AVG_SPEED_STAY_MS) {
+          for (let k = i; k <= end; k++) inStay[k] = 1;
+          i = end + 1;
+        } else {
+          i++;
+        }
+      }
+      let totalKm = 0, totalHr = 0;
+      for (let k = 0; k < n - 1; k++) {
+        if (inStay[k] || inStay[k + 1]) continue;
+        const [la1, lo1, t1] = coords[k];
+        const [la2, lo2, t2] = coords[k + 1];
+        const dtHr = (t2 - t1) / 3_600_000;
+        if (!(dtHr > 0 && dtHr < 2)) continue;
+        const km = haversineKm(la1, lo1, la2, lo2);
+        const kmh = km / dtHr;
+        if (kmh >= AVG_SPEED_EXCLUDE_KMH) continue;
+        totalKm += km;
+        totalHr += dtHr;
+      }
+      return totalHr > 0 ? totalKm / totalHr : null;
+    }
+
     // 除外条件: 休憩等とみなす滞在（30m以内に一定時間以上滞在）、高速移動（20km/h以上）、および低速の通過移動
     const REST_EXCLUDE_KM  = 0.03;          // 休憩とみなす滞在半径(30m)
     let restExcludeMinutes = 30;            // 休憩とみなす滞在時間(分)。ヘッダーのスライダーで調整可能（マンション等では長めに設定）
@@ -2062,7 +2102,11 @@
           const _ms = _c0 && _c0.length ? _c0[0][2] : null;
           if (_ms) {
             const _d = new Date(_ms), _z = n => String(n).padStart(2, '0');
-            fname.textContent = `${_z(_d.getMonth() + 1)}/${_z(_d.getDate())} ${_z(_d.getHours())}:${_z(_d.getMinutes())}`;
+            let _label = `${_z(_d.getMonth() + 1)}/${_z(_d.getDate())} ${_z(_d.getHours())}:${_z(_d.getMinutes())}`;
+            const _avgSpeed = computeTrajectoryAvgSpeed(_c0);
+            if (_avgSpeed != null) _label += `　平均${_avgSpeed.toFixed(1)}km/h`;
+            fname.textContent = _label;
+            fname.title = _label;
           } else if (dev.noData) {
             fname.textContent = 'データなし';
             fname.style.opacity = '0.55';
