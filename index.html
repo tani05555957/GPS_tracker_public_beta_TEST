@@ -183,11 +183,6 @@
       border-left: none;
     }
 
-    /* 境界データの✕ボタンは対になるボタンが無い単独ボタンのため、通常の角丸に戻す */
-    #boundaryGroup .header-btn:first-child {
-      border-radius: 5px;
-    }
-
     #locationDisplay {
       margin-left: auto;
       background: var(--surface);
@@ -324,11 +319,6 @@
       pointer-events: none;
     }
 
-    #designateAreaBtn:not(:disabled) {
-      color: var(--accent);
-      border-color: #f0cccc;
-    }
-
     /* 端末カードリスト */
     #deviceList {
       flex: 1;
@@ -450,7 +440,7 @@
       height: 6px;
       cursor: row-resize;
       background: transparent;
-      display: none;
+      display: block;
       position: relative;
       border-top: 1px solid var(--border);
     }
@@ -1237,10 +1227,6 @@
           <button class="header-btn" id="trackClearBtn" style="padding:6px 9px" title="読み込んだ軌跡データをクリア"
             onclick="clearTrackData()">✕</button>
         </div>
-        <div class="header-group" id="boundaryGroup">
-          <button class="header-btn secondary" id="boundaryClearBtn" title="住所検索・住所コードで読み込んだ境界データを全て解除します"
-            onclick="clearBoundaryData()">🗺 境界データを解除</button>
-        </div>
         <div class="header-group" id="csvReportGroup">
           <label class="header-btn secondary" id="csvReportBtn" for="csvReportInput" title="複数選択・追加読込に対応">📊 住所コード読み込み</label>
           <input type="file" id="csvReportInput" accept=".csv" multiple style="display:none">
@@ -1295,14 +1281,22 @@
       <div id="deviceList"></div>
 
       <div id="city-resizer"></div>
-      <div id="boundarySection" style="display:none">
+      <div id="boundarySection">
         <div class="section-title">
-          <span id="boundarySectionTitle">境界設定</span>
+          <span id="boundarySectionTitle">境界設定（都道府県）</span>
           <span class="count-badge" id="cityCount"></span>
         </div>
         <div id="boundaryControls">
           <div class="filter-area">
-            <input class="filter-input" type="text" id="cityFilterInput" placeholder="市区町村で絞り込み"
+            <div class="bulk-btns" id="boundaryStepper">
+              <button class="bulk-btn" id="boundaryStepPrefBtn" onclick="goBoundaryStage('pref')"
+                title="都道府県トグル表示に切り替えます">都道府県を表示する</button>
+              <button class="bulk-btn" id="boundaryStepCityBtn" onclick="goBoundaryStage('city')"
+                title="選択（トグルON）した都道府県の市区町村を表示します">市区町村を表示する</button>
+              <button class="bulk-btn" id="boundaryStepTownBtn" onclick="goBoundaryStage('town')"
+                title="選択（トグルON）した市区町村の町丁目を表示します">町丁目を表示する</button>
+            </div>
+            <input class="filter-input" type="text" id="cityFilterInput" placeholder="都道府県で絞り込み"
               oninput="onCityFilter(this.value)">
             <div class="bulk-btns">
               <button class="bulk-btn" onclick="bulkCityVisibility(true)">全て表示</button>
@@ -1314,8 +1308,6 @@
                 oninput="onFillOpacity(this.value)">
               <span id="fillOpacityVal" class="slider-val">40%</span>
             </div>
-            <button class="bulk-btn" id="designateAreaBtn" style="width:100%" onclick="designateDeliveryArea()"
-              title="表示中（トグルON）の市区町村を配布エリアに指定し、住所コード読み込み時と同じ町丁目一覧に切り替えます">配布エリアとして指定</button>
           </div>
         </div>
         <div id="cityListHeader" style="display:none"></div>
@@ -1362,6 +1354,11 @@
     let loadedPrefCodes = new Set(); // 読み込み済み都道府県コード
     let autoPrefCodes = new Set();   // 住所コード読込により自動取得された都道府県コード（住所コード解除に連動して自動解除する）
     let boundaryFeatureCount = 0;    // 読み込み済み全フィーチャ数
+
+    // 境界設定ペインの表示段階（都道府県→市区町村→町丁目の3段階を1つのペインで切り替える）
+    let boundaryLevel = 'pref';      // 'pref' | 'city' | 'town'
+    let prefSelected = new Set();    // 都道府県トグルで選択中（トグルON）の都道府県コード集合
+    let townStageFromCSV = false;    // 現在の町丁目表示が住所コードCSV由来か（由来なら都道府県/市区町村へ戻る際にキャンセル確認を出す）
 
     // 政令指定都市の区名かどうかを判定し、親となる市名を返す（例:「横浜市中区」→「横浜市」）。該当しなければnull
     function designatedCityParent(name) {
@@ -2683,10 +2680,6 @@
 
         boundaryFeatureCount += geojson.features.length;
 
-        document.getElementById('boundarySection').style.display = 'flex';
-        document.getElementById('city-resizer').style.display = 'block';
-        document.getElementById('boundaryGroup').classList.add('loaded');
-
         if (csvMode) {
           // CSVモード: 市区町村リストは表示せず町丁目フィルタを適用
           applyCSVFilter();
@@ -2709,39 +2702,6 @@
         console.error(e);
         alert(`境界データの読み込みに失敗しました。\n${e.message}`);
       }
-    }
-
-    function clearBoundaryData() {
-      if (!confirm('境界データの読み込みをキャンセルしますか？')) return;
-
-      // 実行中のapplyCSVFilter()があれば、これ以上townLayersに書き込ませないよう中断させる
-      csvFilterGeneration++;
-
-      Object.values(cityGroups).forEach(g => { if (map.hasLayer(g)) map.removeLayer(g); });
-      Object.values(townLayers).forEach(g => { if (map.hasLayer(g)) map.removeLayer(g); });
-      cityGroups = {}; cityVisibility = {}; citySetai = {}; cityCodes = {}; cityNames = {}; cityPrefCodes = {};
-      townLayers = {};
-      allFeaturesByCode = {};
-      cityKeyByTownCode = {};
-      townSetaiByCode = {};
-      loadedPrefCodes = new Set();
-      autoPrefCodes = new Set();
-      boundaryFeatureCount = 0;
-
-      document.getElementById('boundarySection').style.display = 'none';
-      document.getElementById('city-resizer').style.display = 'none';
-      document.getElementById('boundaryGroup').classList.remove('loaded');
-
-      if (csvMode) updateTownList();
-
-      // 境界データが無くなったので、集計に関わるコントロール類を隠す
-      document.getElementById('restDurationRow').style.display = 'none';
-      document.getElementById('secPerUnitRow').style.display = 'none';
-      document.getElementById('transitSpeedRow').style.display = 'none';
-
-      townFeatureList = [];
-      townSpatialIdx = null;
-      computeVisitEstimates();
     }
 
     // 指定した都道府県コード群の境界データ（市区町村レイヤー・町丁目インデックス等）だけを取り除く。
@@ -2776,13 +2736,59 @@
       buildTownSpatialIndex();
     }
 
-    // 表示中（トグルON）の市区町村が「配布エリアとして指定」可能かどうかを判定する
-    // （1市区町村のみ、または同一の政令指定都市の区のみが複数表示されている場合に可）
-    function canDesignateVisibleCities(visibleKeys) {
-      if (visibleKeys.length === 1) return true;
-      if (visibleKeys.length < 1) return false;
-      const parents = visibleKeys.map(k => designatedCityParent(cityNames[k]));
-      return parents.every(p => p && p === parents[0]);
+    // ===== 境界設定ペイン：都道府県トグル表示段階 =====
+    // 都道府県は静的な47件の一覧のため、フェッチ不要で常にすぐ表示できる
+    // （実際のポリゴン取得は「市区町村を表示する」を押した時点で選択中の県だけ行う）
+    function renderPrefStage() {
+      const q = cityFilterText.toLowerCase().replace(/\s+/g, '');
+      // Object.keys()は'10'〜'47'のような整数形式の文字列キーを昇順で先頭に並べ替えてしまう
+      // （'01'〜'09'は非正規形なので挿入順のまま）ため、明示的に文字列ソートして01→47の順に揃える
+      const matched = Object.keys(PREF_NAMES).sort().filter(code => !q || PREF_NAMES[code].toLowerCase().includes(q));
+
+      document.getElementById('cityCount').textContent = `${prefSelected.size}件選択`;
+
+      const hdr = document.getElementById('cityListHeader');
+      hdr.innerHTML = '<div class="h-toggle"></div><span class="h-name">都道府県名</span>';
+      hdr.style.display = 'flex';
+
+      const el = document.getElementById('cityList');
+      el.innerHTML = '';
+      matched.forEach(code => {
+        const on = prefSelected.has(code);
+        const row = document.createElement('div');
+        row.className = 'city-row';
+
+        const tog = document.createElement('div');
+        tog.className = 'city-toggle' + (on ? ' on' : '');
+
+        const nm = document.createElement('span');
+        nm.className = 'city-name';
+        nm.textContent = PREF_NAMES[code];
+
+        row.appendChild(tog);
+        row.appendChild(nm);
+        row.addEventListener('click', () => togglePref(code));
+        el.appendChild(row);
+      });
+      if (!el.children.length)
+        el.innerHTML = '<div style="padding:8px 12px;font-size:11px;color:var(--text-muted)">該当なし</div>';
+
+      updateBoundaryStepper();
+    }
+
+    function togglePref(code) {
+      if (prefSelected.has(code)) prefSelected.delete(code); else prefSelected.add(code);
+      renderPrefStage();
+    }
+
+    // 「全て表示/全て非表示」の都道府県トグル表示段階版（現在の絞り込みに一致する県だけを対象にする）
+    function bulkPrefVisibility(show) {
+      const q = cityFilterText.toLowerCase().replace(/\s+/g, '');
+      Object.keys(PREF_NAMES).forEach(code => {
+        if (q && !PREF_NAMES[code].toLowerCase().includes(q)) return;
+        if (show) prefSelected.add(code); else prefSelected.delete(code);
+      });
+      renderPrefStage();
     }
 
     // 市区町村一覧の絞り込み条件（cityFilterText）に一致するかどうかを判定する（bulkCityVisibilityと共用）
@@ -2794,8 +2800,7 @@
 
     function updateCityList() {
       const showStats = boundaryFeatureCount > 0;
-      // 住所コード（CSV）モードから戻ってきた場合に備え、ボタンを再表示する
-      document.getElementById('designateAreaBtn').style.display = '';
+      document.getElementById('cityCount').textContent = `${Object.keys(cityGroups).length}市区町村`;
 
       const q = cityFilterText.toLowerCase().replace(/\s+/g, '');
       const showPref = loadedPrefCodes.size > 1;
@@ -2809,9 +2814,6 @@
           return { key, label };
         })
         .sort((a, b) => (cityCodes[a.key] || a.key).localeCompare(cityCodes[b.key] || b.key));
-
-      const visibleKeys = Object.keys(cityGroups).filter(key => cityVisibility[key]);
-      document.getElementById('designateAreaBtn').disabled = !canDesignateVisibleCities(visibleKeys);
 
       const hdr = document.getElementById('cityListHeader');
       hdr.innerHTML =
@@ -2866,16 +2868,154 @@
       });
       if (!el.children.length)
         el.innerHTML = '<div style="padding:8px 12px;font-size:11px;color:var(--text-muted)">該当なし</div>';
+
+      updateBoundaryStepper();
     }
 
-    // 表示中（トグルON）の市区町村を「配布エリア」として指定し、住所コード読み込み時と同じ状態
-    // （csvMode、町丁目一覧）に切り替える。政令指定都市の区が複数表示されている場合はまとめて対象にする
-    async function designateDeliveryArea() {
-      const visibleKeys = Object.keys(cityGroups).filter(key => cityVisibility[key]);
-      if (!canDesignateVisibleCities(visibleKeys)) {
-        alert('配布エリアとして指定するには、市区町村を1つだけ表示（トグルON）してください。\n（政令指定都市の場合は同じ市の区どうしであれば複数表示できます）');
+    // ===== 境界設定ペイン：3段階（都道府県／市区町村／町丁目）のステッパー制御 =====
+    // 現段階で選択中（トグルON）の件数を見て、次の段階のボタンを押せるかどうかを判定する。
+    // ルール: 現在の段階のボタンは常に押せない（すでにそこにいるため）。
+    // 手前の段階へは常に戻れる。1つ先の段階へは、現在1件以上トグルONの時だけ進める。
+    // 2段階以上先（都道府県→町丁目など）へは直接進めない。
+    function updateBoundaryStepper() {
+      const idx = { pref: 0, city: 1, town: 2 }[boundaryLevel];
+      const countAtCurrent = boundaryLevel === 'pref'
+        ? prefSelected.size
+        : boundaryLevel === 'city'
+          ? Object.keys(cityGroups).filter(k => cityVisibility[k]).length
+          : 0;
+      const enabledFor = i => i !== idx && (i < idx || (i === idx + 1 && countAtCurrent >= 1));
+
+      const prefBtn = document.getElementById('boundaryStepPrefBtn');
+      const cityBtn = document.getElementById('boundaryStepCityBtn');
+      const townBtn = document.getElementById('boundaryStepTownBtn');
+      prefBtn.disabled = !enabledFor(0);
+      cityBtn.disabled = !enabledFor(1);
+      townBtn.disabled = !enabledFor(2);
+      prefBtn.classList.toggle('active', boundaryLevel === 'pref');
+      cityBtn.classList.toggle('active', boundaryLevel === 'city');
+      townBtn.classList.toggle('active', boundaryLevel === 'town');
+    }
+
+    // ステッパーボタンのクリックハンドラ。段階の飛び越し・現在段階への再遷移はここで弾く
+    function goBoundaryStage(target) {
+      if (target === boundaryLevel) return;
+      // CSV由来の町丁目表示から離れる場合のみ、住所コードのキャンセルと同じ確認を挟む
+      if (boundaryLevel === 'town' && target !== 'town' && townStageFromCSV) {
+        if (!confirm('住所コードの読み込みをキャンセルしますか？')) return;
+      }
+      if (target === 'pref') { backToPrefStage(); return; }
+      if (target === 'city') {
+        if (boundaryLevel === 'pref') advanceToCityStage();
+        else if (boundaryLevel === 'town') backToCityStageFromTown();
         return;
       }
+      if (target === 'town' && boundaryLevel === 'city') advanceToTownStage();
+    }
+
+    // 都道府県トグル表示段階へ入る（都道府県一覧は選択中の状態を読み込み済み都道府県から作り直す）
+    function enterPrefStage() {
+      boundaryLevel = 'pref';
+      prefSelected = new Set(loadedPrefCodes);
+      document.getElementById('boundarySectionTitle').textContent = '境界設定（都道府県）';
+      document.getElementById('cityFilterInput').placeholder = '都道府県で絞り込み';
+      cityFilterText = '';
+      document.getElementById('cityFilterInput').value = '';
+      renderPrefStage();
+    }
+
+    // 市区町村トグル表示段階へ入る（cityGroupsは既に選択中の都道府県分だけになっている前提）。
+    // 都道府県トグル表示段階で外した分も含め、cityVisibilityの状態通りに地図上のレイヤーを揃え直す
+    function enterCityStage() {
+      boundaryLevel = 'city';
+      document.getElementById('boundarySectionTitle').textContent = '境界設定（市区町村）';
+      document.getElementById('cityFilterInput').placeholder = '市区町村で絞り込み';
+      cityFilterText = '';
+      document.getElementById('cityFilterInput').value = '';
+      showCityLayersPerVisibility();
+      updateCityList();
+    }
+
+    function hideAllCityLayers() {
+      Object.values(cityGroups).forEach(g => { if (map.hasLayer(g)) map.removeLayer(g); });
+    }
+
+    function showCityLayersPerVisibility() {
+      Object.entries(cityGroups).forEach(([key, g]) => {
+        if (cityVisibility[key] && !map.hasLayer(g)) g.addTo(map);
+      });
+    }
+
+    // 都道府県トグルで選択中の都道府県だけを読み込み、市区町村トグル表示段階へ進む
+    // （2県以上選択されている場合は表示が重くなる旨を確認する）
+    async function advanceToCityStage() {
+      const selected = [...prefSelected];
+      if (!selected.length) return;
+      if (selected.length >= 2 &&
+        !confirm(`選択した${selected.length}件の都道府県をすべて表示すると、表示が重くなる可能性があります。続行しますか？`)) return;
+
+      const toUnload = new Set([...loadedPrefCodes].filter(c => !prefSelected.has(c)));
+      if (toUnload.size) unloadPrefectures(toUnload);
+
+      const toFetch = selected.filter(c => !loadedPrefCodes.has(c));
+      if (toFetch.length) {
+        const prefBtn = document.getElementById('boundaryStepPrefBtn');
+        const cityBtn = document.getElementById('boundaryStepCityBtn');
+        const townBtn = document.getElementById('boundaryStepTownBtn');
+        const prevLabel = cityBtn.textContent;
+        prefBtn.disabled = cityBtn.disabled = townBtn.disabled = true;
+        cityBtn.textContent = '⏳ 読み込み中...';
+        try {
+          for (const prefCode of toFetch) await loadPrefectureByCode(prefCode);
+        } finally {
+          cityBtn.textContent = prevLabel;
+        }
+      }
+
+      enterCityStage();
+    }
+
+    // 市区町村または町丁目トグル表示段階から、都道府県トグル表示段階へ戻る
+    // （読み込み済みデータ自体は破棄せず、地図上のレイヤーだけを外す。再度進めば再取得なしで即表示できる）
+    function backToPrefStage() {
+      if (boundaryLevel === 'town') teardownTownStage();
+      hideAllCityLayers();
+      enterPrefStage();
+    }
+
+    // 町丁目トグル表示段階の状態を後片付けする（住所コードCSV由来の自動取得都道府県はここで解除する）
+    function teardownTownStage() {
+      csvFilterGeneration++; // 実行中のapplyCSVFilter()があれば中断させる
+      Object.values(townLayers).forEach(g => { if (map.hasLayer(g)) map.removeLayer(g); });
+      townLayers = {};
+      csvTowns = [];
+      csvMode = false;
+      townFilterText = '';
+      townVisibility = {};
+      townStageFromCSV = false;
+
+      document.getElementById('csvReportGroup').classList.remove('loaded');
+      const btn = document.getElementById('csvReportBtn');
+      btn.textContent = '📊 住所コード読み込み';
+      btn.classList.remove('active');
+
+      if (autoPrefCodes.size) unloadPrefectures(new Set(autoPrefCodes));
+    }
+
+    // 町丁目トグル表示段階から、市区町村トグル表示段階へ戻る
+    function backToCityStageFromTown() {
+      teardownTownStage();
+      enterCityStage();
+      computeVisitEstimates();
+    }
+
+    // 表示中（トグルON）の市区町村から町丁目一覧を組み立て、町丁目トグル表示段階へ進む
+    // （5市区町村以上を対象にすると表示が重くなるため事前に確認する）
+    async function advanceToTownStage() {
+      const visibleKeys = Object.keys(cityGroups).filter(key => cityVisibility[key]);
+      if (!visibleKeys.length) return;
+      if (visibleKeys.length >= 5 &&
+        !confirm(`選択した${visibleKeys.length}件の市区町村をすべて表示すると、表示が重くなる可能性があります。続行しますか？`)) return;
 
       const keySet = new Set(visibleKeys);
       const towns = [];
@@ -2895,9 +3035,8 @@
       }
       if (!towns.length) { alert('指定した市区町村内に町丁目データが見つかりません。'); return; }
 
-      // 既存の町丁目/市区町村レイヤーをクリア
       Object.values(townLayers).forEach(g => { if (map.hasLayer(g)) map.removeLayer(g); });
-      Object.values(cityGroups).forEach(g => { if (map.hasLayer(g)) map.removeLayer(g); });
+      hideAllCityLayers();
 
       csvTowns = towns;
       csvMode = true;
@@ -2905,18 +3044,19 @@
       townFilterText = '';
       townVisibility = {};
       csvTowns.forEach(t => { townVisibility[t.code] = true; });
+      townStageFromCSV = false;
 
-      // UIを住所コード（CSV）読み込み時と同じ状態に切り替える
-      document.getElementById('boundarySectionTitle').textContent = '住所コード';
+      boundaryLevel = 'town';
+      document.getElementById('boundarySectionTitle').textContent = '境界設定（町丁目）';
       document.getElementById('cityFilterInput').placeholder = '町丁目名で絞り込み';
       document.getElementById('cityFilterInput').value = '';
-      document.getElementById('designateAreaBtn').style.display = 'none';
 
       applyCSVFilter();
 
       document.getElementById('csvReportGroup').classList.add('loaded');
       document.getElementById('csvReportBtn').classList.add('active');
 
+      updateBoundaryStepper();
       // 対象範囲(住所コード欄の粒度)が変わるため、配布率を自動的に再集計する
       computeVisitEstimates();
     }
@@ -2933,6 +3073,7 @@
     // 「全て表示/全て非表示」は、現在の絞り込み（cityFilterText）に一致する行だけを対象にする
     // （絞り込みで隠れている市区町村の表示状態は変えない）
     function bulkCityVisibility(show) {
+      if (boundaryLevel === 'pref') { bulkPrefVisibility(show); return; }
       if (csvMode) { bulkTownVisibility(show); return; }
       const q = cityFilterText.toLowerCase().replace(/\s+/g, '');
       Object.keys(cityGroups).forEach(key => {
@@ -2946,6 +3087,7 @@
     }
 
     function onCityFilter(val) {
+      if (boundaryLevel === 'pref') { cityFilterText = val; renderPrefStage(); return; }
       if (csvMode) { onTownFilter(val); return; }
       cityFilterText = val; updateCityList();
     }
@@ -3245,7 +3387,7 @@
       if (!hasRateData) { rateHeatmapVisible = false; rateAutoShown = false; }
 
       applyBoundaryColorStyle();
-      if (csvMode) updateTownList(); else updateCityList();
+      if (csvMode) updateTownList(); else if (boundaryLevel === 'pref') renderPrefStage(); else updateCityList();
     }
 
     // ===== CSVレポート =====
@@ -3344,11 +3486,9 @@
 
       // この関数内で住所コードに紐づく境界データを自動fetchし終えるまでの間、
       // ✕ボタンで途中解除されると自動fetchの結果が解除後に遅れて反映される競合状態になるため、
-      // 処理完了までは両方の✕ボタンを操作不可にする
+      // 処理完了までは✕ボタンを操作不可にする
       const csvClearBtn = document.getElementById('csvReportClearBtn');
-      const boundaryClearBtn = document.getElementById('boundaryClearBtn');
       csvClearBtn.style.pointerEvents = 'none';
-      boundaryClearBtn.style.pointerEvents = 'none';
 
       try {
         const buf = await file.arrayBuffer();
@@ -3403,9 +3543,8 @@
         document.getElementById('boundarySectionTitle').textContent = '住所コード';
         document.getElementById('cityFilterInput').placeholder = '町丁目名で絞り込み';
         document.getElementById('cityFilterInput').value = '';
-        document.getElementById('boundarySection').style.display = 'flex';
-        document.getElementById('city-resizer').style.display = 'block';
-        document.getElementById('designateAreaBtn').style.display = 'none';
+        boundaryLevel = 'town';
+        townStageFromCSV = true;
 
         // 住所コードから都道府県コードを判定し、未読込の県があれば境界データを自動取得する
         // （ユーザーが先に境界データを読み込んでおく必要をなくす。confirm確認は自動処理では出さない）
@@ -3424,6 +3563,7 @@
         document.getElementById('csvReportGroup').classList.add('loaded');
         btn.textContent = '📊 住所コード読み込み';
         btn.classList.add('active');
+        updateBoundaryStepper();
 
         // 対象範囲が実際に増えた場合のみ再集計する
         // （同じCSVを重複読込した場合など、新規追加が無ければ無駄な再計算をスキップする）
@@ -3437,47 +3577,17 @@
       } finally {
         btn.style.pointerEvents = '';
         csvClearBtn.style.pointerEvents = '';
-        boundaryClearBtn.style.pointerEvents = '';
       }
     }
 
     function clearCSVReport() {
       if (!confirm('住所コードの読み込みをキャンセルしますか？')) return;
 
-      // 実行中のapplyCSVFilter()があれば、これ以上townLayersに書き込ませないよう中断させる
-      csvFilterGeneration++;
-
-      Object.values(townLayers).forEach(g => { if (map.hasLayer(g)) map.removeLayer(g); });
-      townLayers = {};
-      csvTowns = [];
-      csvMode = false;
-      townFilterText = '';
-      townVisibility = {};
-
-      document.getElementById('csvReportGroup').classList.remove('loaded');
-      const btn = document.getElementById('csvReportBtn');
-      btn.textContent = '📊 住所コード読み込み';
-      btn.classList.remove('active');
-
-      // 境界（市区町村）表示に戻す
-      document.getElementById('boundarySectionTitle').textContent = '境界設定';
-      document.getElementById('cityFilterInput').placeholder = '市区町村で絞り込み';
-      document.getElementById('cityFilterInput').value = '';
-      cityFilterText = '';
-
-      // 住所コード読込に伴い自動取得した都道府県の境界データを解除する（手動で読み込んだ都道府県は残す）
-      if (autoPrefCodes.size) unloadPrefectures(new Set(autoPrefCodes));
-
+      teardownTownStage();
       if (Object.keys(cityGroups).length > 0) {
-        document.getElementById('boundarySection').style.display = 'flex';
-        document.getElementById('city-resizer').style.display = 'block';
-        Object.entries(cityGroups).forEach(([key, g]) => {
-          if (cityVisibility[key] && !map.hasLayer(g)) g.addTo(map);
-        });
-        updateCityList();
+        enterCityStage();
       } else {
-        document.getElementById('boundarySection').style.display = 'none';
-        document.getElementById('city-resizer').style.display = 'none';
+        enterPrefStage();
       }
 
       // 住所コード解除で集計の対象範囲(粒度)が変わるため再集計する
@@ -3558,6 +3668,7 @@
       if (Object.keys(allFeaturesByCode).length === 0) {
         el.innerHTML = '<div style="padding:12px;font-size:11px;color:var(--text-muted);text-align:center">境界データの自動取得に失敗しました。インターネット接続を確認してください</div>';
         document.getElementById('cityCount').textContent = `${csvTowns.length}件`;
+        updateBoundaryStepper();
         return;
       }
 
@@ -3633,6 +3744,8 @@
 
       if (!el.children.length)
         el.innerHTML = '<div style="padding:8px 12px;font-size:11px;color:var(--text-muted)">該当なし</div>';
+
+      updateBoundaryStepper();
     }
 
     function toggleTown(code, show) {
@@ -3918,9 +4031,9 @@
         cityFilterText = filterLabel;
         document.getElementById('cityFilterInput').value = filterLabel;
         document.getElementById('cityFilterInput').placeholder = '市区町村で絞り込み';
-        document.getElementById('boundarySection').style.display = 'flex';
-        document.getElementById('city-resizer').style.display = 'block';
-        document.getElementById('cityCount').textContent = `${Object.keys(cityGroups).length}市区町村`;
+        document.getElementById('boundarySectionTitle').textContent = '境界設定（市区町村）';
+        boundaryLevel = 'city';
+        showCityLayersPerVisibility();
         updateCityList();
       } catch (e) {
         console.error('検索語からの境界データ自動読込に失敗しました:', e);
@@ -4243,7 +4356,7 @@
       pruneUnreferencedGeoCache();
     }
 
-    // 復元前に全状態を初期値へ戻す（clearTrackData/clearBoundaryData/clearCSVReportの本体相当。
+    // 復元前に全状態を初期値へ戻す（clearTrackData/clearCSVReportの本体相当。
     // confirmダイアログを介さず呼べるようにするための専用実装）
     function resetAllStateForRestore() {
       csvFilterGeneration++; // 実行中のapplyCSVFilter()があれば中断させる
@@ -4264,22 +4377,18 @@
       boundaryFeatureCount = 0;
       cityFilterText = '';
 
-      csvTowns = []; csvMode = false; townFilterText = ''; townVisibility = {};
+      csvTowns = []; csvMode = false; townFilterText = ''; townVisibility = {}; townStageFromCSV = false;
       townFeatureList = []; townSpatialIdx = null;
 
       document.getElementById('trackGroup').classList.remove('loaded');
-      document.getElementById('boundaryGroup').classList.remove('loaded');
       document.getElementById('csvReportGroup').classList.remove('loaded');
       document.getElementById('csvReportBtn').textContent = '📊 住所コード読み込み';
       document.getElementById('csvReportBtn').classList.remove('active');
-      document.getElementById('boundarySection').style.display = 'none';
-      document.getElementById('city-resizer').style.display = 'none';
-      document.getElementById('boundarySectionTitle').textContent = '境界設定';
-      document.getElementById('cityFilterInput').placeholder = '市区町村で絞り込み';
-      document.getElementById('cityFilterInput').value = '';
       document.getElementById('restDurationRow').style.display = 'none';
       document.getElementById('secPerUnitRow').style.display = 'none';
       document.getElementById('transitSpeedRow').style.display = 'none';
+
+      enterPrefStage();
     }
 
     // allFeaturesByCode + cityKeyByTownCode から市区町村レイヤーを再構築する
@@ -4362,28 +4471,25 @@
             if (boundaryFeatureCount > 0) {
               await rebuildCityLayersFromCache();
               buildTownSpatialIndex();
-              document.getElementById('boundaryGroup').classList.add('loaded');
               document.getElementById('restDurationRow').style.display = '';
               document.getElementById('secPerUnitRow').style.display = '';
               document.getElementById('transitSpeedRow').style.display = '';
             }
             pf.style.width = '80%';
 
-            if (boundaryFeatureCount > 0 || csvTowns.length > 0) {
-              document.getElementById('boundarySection').style.display = 'flex';
-              document.getElementById('city-resizer').style.display = 'block';
-            }
-
             if (csvMode) {
+              boundaryLevel = 'town';
+              townStageFromCSV = true;
               document.getElementById('boundarySectionTitle').textContent = '住所コード';
               document.getElementById('cityFilterInput').placeholder = '町丁目名で絞り込み';
-              document.getElementById('designateAreaBtn').style.display = 'none';
               document.getElementById('csvReportGroup').classList.add('loaded');
               document.getElementById('csvReportBtn').classList.add('active');
               if (boundaryFeatureCount > 0) await applyCSVFilter();
             } else if (boundaryFeatureCount > 0) {
+              boundaryLevel = 'city';
+              document.getElementById('boundarySectionTitle').textContent = '境界設定（市区町村）';
+              document.getElementById('cityFilterInput').placeholder = '市区町村で絞り込み';
               document.getElementById('cityCount').textContent = `${Object.keys(cityGroups).length}市区町村`;
-              document.getElementById('designateAreaBtn').style.display = '';
             }
           }
         }
@@ -4550,6 +4656,10 @@
     document.getElementById('slNewName').addEventListener('keydown', e => {
       if (e.key === 'Enter') document.getElementById('slNewSaveBtn').click();
     });
+
+    // ===== 初期表示 =====
+    // 境界設定ペインは常に表示し、起動直後は都道府県トグル一覧を出しておく（データ取得不要ですぐ描画できる）
+    renderPrefStage();
 
     // ===== ヘッダー内ネイティブツールチップの抑制 =====
     // title属性によるブラウザ標準の吹き出しが「保存」「再開」ボタン等に重なりクリックの妨げになるため、
