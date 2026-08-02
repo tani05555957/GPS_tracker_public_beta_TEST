@@ -1338,7 +1338,7 @@
       <div class="section-title">
         端末一覧
         <span class="count-badge" id="deviceCount"></span>
-        <span class="section-title-actions">
+        <span class="section-title-actions" id="deviceExpandActions" style="display:none">
           <button class="section-icon-btn" onclick="expandAllGroups(true)" title="すべて展開">⊞</button>
           <button class="section-icon-btn" onclick="expandAllGroups(false)" title="すべて閉じる">⊟</button>
         </span>
@@ -2213,6 +2213,8 @@
       const badge = document.getElementById('deviceCount');
       controls.innerHTML = ''; list.innerHTML = '';
 
+      document.getElementById('deviceExpandActions').style.display = DEVICES.length ? '' : 'none';
+
       if (!DEVICES.length) {
         badge.textContent = '';
         list.innerHTML = `
@@ -3063,14 +3065,6 @@
       }
 
       enterCityStage();
-
-      // 選択した都道府県（複数可）の範囲全体が収まるようにマップをフォーカスする
-      const selectedSet = new Set(selected);
-      const bounds = L.latLngBounds([]);
-      Object.entries(cityGroups).forEach(([key, g]) => {
-        if (selectedSet.has(cityPrefCodes[key])) bounds.extend(g.getBounds());
-      });
-      if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40] });
     }
 
     // 市区町村または町丁目トグル表示段階から、都道府県トグル表示段階へ戻る
@@ -3715,15 +3709,23 @@
       const myGen = ++csvFilterGeneration;
 
       const fillOp = cityFillOpacity;
+      // あいまい一致（桁のずれ吸収）が必要な場合だけのフォールバック用。ループの外で1回だけ作る
+      // （町丁目ごとに全件を作り直すと件数の掛け算で著しく遅くなるため）
+      const allEntries = Object.entries(allFeaturesByCode);
 
       let processed = 0;
       for (const town of csvTowns) {
         if (myGen !== csvFilterGeneration) return; // 新しい呼び出しに引き継がれたため中断
         if (townLayers[town.code]) continue; // 構築済みの町丁目は表示状態を保ったまま維持する
 
-        const matched = [];
-        for (const [code, features] of Object.entries(allFeaturesByCode)) {
-          if (matchCode(town.code, code)) { matched.push(...features); break; }
+        // 住所コードは境界データのKEY_CODEとほぼ完全一致するため、まず直接引き（O(1)）を試す。
+        // 見つからない場合のみ、桁のずれ等を吸収するあいまい一致に総当たりでフォールバックする
+        let matched = allFeaturesByCode[town.code];
+        if (!matched) {
+          matched = [];
+          for (const [code, features] of allEntries) {
+            if (matchCode(town.code, code)) { matched = features; break; }
+          }
         }
         if (!matched.length) continue;
 
