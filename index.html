@@ -2139,13 +2139,14 @@
       const soleNoData = !multi && group.devices[0]?.noData;
       return multi || !soleNoData;
     }
-    // 展開中の軌跡リストでトグルがちょうど1つだけONになったとき、その軌跡の始点〜終点が収まるようにズームする
-    function focusSingleTrack(group) {
+    // 展開中の軌跡リストでトグルを操作したとき、その時点でONになっている軌跡（複数可）が
+    // 全部収まるようにズームする。ONが0件（全部OFFにした）場合は現在の表示のまま動かさない
+    function focusVisibleTracksInGroup(group) {
       const onDevs = group.devices.filter(d => visibility[d.key]);
-      if (onDevs.length !== 1) return;
-      const coords = GPX_DATA[onDevs[0].key];
-      if (!coords || !coords.length) return;
-      const bounds = L.latLngBounds(coords.map(([la, lo]) => [la, lo]));
+      if (!onDevs.length) return;
+      const coords = onDevs.flatMap(d => GPX_DATA[d.key] || []).map(([la, lo]) => [la, lo]);
+      if (!coords.length) return;
+      const bounds = L.latLngBounds(coords);
       if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40] });
     }
     function makeGroupCard(group, gi) {
@@ -2177,7 +2178,7 @@
           fileRow.className = 'file-row';
           const ftog = document.createElement('div');
           ftog.className = 'file-toggle' + (on ? ' on' : '');
-          ftog.addEventListener('click', e => { e.stopPropagation(); visibility[dev.key] = !visibility[dev.key]; render(); focusSingleTrack(group); });
+          ftog.addEventListener('click', e => { e.stopPropagation(); visibility[dev.key] = !visibility[dev.key]; render(); focusVisibleTracksInGroup(group); });
           const fname = document.createElement('span');
           fname.className = 'file-name';
           const _c0 = GPX_DATA[dev.key];
@@ -2198,7 +2199,7 @@
           }
           fileRow.appendChild(ftog);
           fileRow.appendChild(fname);
-          fileRow.addEventListener('click', () => { visibility[dev.key] = !visibility[dev.key]; render(); focusSingleTrack(group); });
+          fileRow.addEventListener('click', () => { visibility[dev.key] = !visibility[dev.key]; render(); focusVisibleTracksInGroup(group); });
           fileList.appendChild(fileRow);
         });
         card.appendChild(fileList);
