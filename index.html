@@ -2102,6 +2102,20 @@
     }
 
     // ===== サイドバー更新 =====
+    function isGroupExpandable(group) {
+      const multi = group.devices.length > 1;
+      const soleNoData = !multi && group.devices[0]?.noData;
+      return multi || !soleNoData;
+    }
+    // 展開中の軌跡リストでトグルがちょうど1つだけONになったとき、その軌跡の始点〜終点が収まるようにズームする
+    function focusSingleTrack(group) {
+      const onDevs = group.devices.filter(d => visibility[d.key]);
+      if (onDevs.length !== 1) return;
+      const coords = GPX_DATA[onDevs[0].key];
+      if (!coords || !coords.length) return;
+      const bounds = L.latLngBounds(coords.map(([la, lo]) => [la, lo]));
+      if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40] });
+    }
     function makeGroupCard(group, gi) {
       const allOn = group.devices.every(d => visibility[d.key]);
       const someOn = group.devices.some(d => visibility[d.key]);
@@ -2109,7 +2123,7 @@
       const color = group.devices[0]?.color || '#888';
       const multi = group.devices.length > 1;
       const soleNoData = !multi && group.devices[0]?.noData;
-      const expandable = multi || !soleNoData;
+      const expandable = isGroupExpandable(group);
       const expanded = expandable && !!groupExpanded[gi];
       const arrow = expandable ? `<span style="font-size:9px;opacity:0.55;margin-left:3px">${expanded ? '▴' : '▾'}</span>` : '';
       const card = document.createElement('div');
@@ -2131,7 +2145,7 @@
           fileRow.className = 'file-row';
           const ftog = document.createElement('div');
           ftog.className = 'file-toggle' + (on ? ' on' : '');
-          ftog.addEventListener('click', e => { e.stopPropagation(); visibility[dev.key] = !visibility[dev.key]; render(); });
+          ftog.addEventListener('click', e => { e.stopPropagation(); visibility[dev.key] = !visibility[dev.key]; render(); focusSingleTrack(group); });
           const fname = document.createElement('span');
           fname.className = 'file-name';
           const _c0 = GPX_DATA[dev.key];
@@ -2152,7 +2166,7 @@
           }
           fileRow.appendChild(ftog);
           fileRow.appendChild(fname);
-          fileRow.addEventListener('click', () => { visibility[dev.key] = !visibility[dev.key]; render(); });
+          fileRow.addEventListener('click', () => { visibility[dev.key] = !visibility[dev.key]; render(); focusSingleTrack(group); });
           fileList.appendChild(fileRow);
         });
         card.appendChild(fileList);
@@ -2186,6 +2200,10 @@
           <button class="bulk-btn" onclick="bulkVisibility(true)">全て表示</button>
           <button class="bulk-btn" onclick="bulkVisibility(false)">全て非表示</button>
         </div>
+        <div class="bulk-btns">
+          <button class="bulk-btn" onclick="expandAllGroups(true)">すべて展開</button>
+          <button class="bulk-btn" onclick="expandAllGroups(false)">すべて閉じる</button>
+        </div>
       </div>`;
 
       const q = filterText.toLowerCase();
@@ -2209,6 +2227,10 @@
     }
     function toggleGroupExpand(gi) {
       groupExpanded[gi] = !groupExpanded[gi];
+      updateSidebar();
+    }
+    function expandAllGroups(expand) {
+      GROUPS.forEach((g, gi) => { if (isGroupExpandable(g)) groupExpanded[gi] = expand; });
       updateSidebar();
     }
     function onFilter(val) { filterText = val; updateSidebar(); }
