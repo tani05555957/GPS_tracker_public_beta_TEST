@@ -2762,10 +2762,10 @@
           // 同じ市区町村キーを再読み込みした場合は古いレイヤーを差し替える
           if (cityGroups[key] && map.hasLayer(cityGroups[key])) map.removeLayer(cityGroups[key]);
 
+          // 境界線は読み込み直後に自動表示せず、既定は非表示にする（必要な市区町村だけユーザーが個別にONにする）
           const layer = buildCityGeoJSONLayer(features);
-          if (!csvMode && !opts.silent) layer.addTo(map);
           cityGroups[key] = layer;
-          if (!(key in cityVisibility)) cityVisibility[key] = !csvMode && !opts.silent;
+          if (!(key in cityVisibility)) cityVisibility[key] = false;
         });
 
         boundaryFeatureCount += geojson.features.length;
@@ -3063,6 +3063,14 @@
       }
 
       enterCityStage();
+
+      // 選択した都道府県（複数可）の範囲全体が収まるようにマップをフォーカスする
+      const selectedSet = new Set(selected);
+      const bounds = L.latLngBounds([]);
+      Object.entries(cityGroups).forEach(([key, g]) => {
+        if (selectedSet.has(cityPrefCodes[key])) bounds.extend(g.getBounds());
+      });
+      if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40] });
     }
 
     // 市区町村または町丁目トグル表示段階から、都道府県トグル表示段階へ戻る
@@ -3155,7 +3163,11 @@
       cityVisibility[key] = show;
       const g = cityGroups[key];
       if (!g) return;
-      if (show && !map.hasLayer(g)) g.addTo(map);
+      if (show && !map.hasLayer(g)) {
+        g.addTo(map);
+        const b = g.getBounds();
+        if (b.isValid()) map.fitBounds(b, { padding: [40, 40], maxZoom: 17, animate: false });
+      }
       else if (!show && map.hasLayer(g)) map.removeLayer(g);
       updateCityList();
     }
