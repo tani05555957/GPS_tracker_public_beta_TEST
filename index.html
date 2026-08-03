@@ -1064,6 +1064,18 @@
       font-size: 10px;
     }
 
+    /* 境界ポリゴンの町字名など、あくまで参考情報の表示用に控えめな見た目にする */
+    #hover-tooltip.ht-subtle {
+      background: rgba(255, 255, 255, 0.85);
+      border-color: rgba(0, 0, 0, 0.08);
+      box-shadow: 0 1px 5px rgba(0, 0, 0, 0.10);
+    }
+
+    #hover-tooltip.ht-subtle .ht-label {
+      font-weight: 400;
+      color: rgba(0, 0, 0, 0.55);
+    }
+
     @keyframes fadeIn {
       from {
         opacity: 0;
@@ -3357,9 +3369,9 @@
           if (label) {
             lyr.on('mouseover', e => {
               _balloonLocked = true;
-              showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor');
+              showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
             });
-            lyr.on('mousemove', e => showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor'));
+            lyr.on('mousemove', e => showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true));
             lyr.on('mouseout', hideBalloon);
           }
           lyr.on('mouseover', () => lyr.setStyle({ fillOpacity: Math.min(1, cityFillOpacity + 0.25), weight: 2.5 }));
@@ -3745,9 +3757,9 @@
             if (label) {
               lyr.on('mouseover', e => {
                 _balloonLocked = true;
-                showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor');
+                showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
               });
-              lyr.on('mousemove', e => showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor'));
+              lyr.on('mousemove', e => showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true));
               lyr.on('mouseout', hideBalloon);
             }
             lyr.on('mouseover', () => lyr.setStyle({ fillOpacity: Math.min(1, fillOp + 0.25), weight: 2.5 }));
@@ -3968,10 +3980,12 @@
     }
 
     // color: 端末色（nullなら無着色）, detailHtml: 2行目（空文字なら非表示）
-    function showBalloon(color, label, detailHtml, x, y, anchor) {
+    // subtle: trueなら控えめな見た目にする（境界ポリゴンの町字名など、あくまで参考情報の表示用）
+    function showBalloon(color, label, detailHtml, x, y, anchor, subtle) {
       // カーソルが地図上端付近にあると吹き出しがヘッダーに重なってしまうため表示しない
       const mapTop = map.getContainer().getBoundingClientRect().top;
       if (y - mapTop < MAP_TOP_MARGIN) { hoverTip.style.display = 'none'; return; }
+      hoverTip.classList.toggle('ht-subtle', !!subtle);
       htLabel.style.color = color || '';
       htLabel.textContent = label;
       htTime.innerHTML = detailHtml || '';
