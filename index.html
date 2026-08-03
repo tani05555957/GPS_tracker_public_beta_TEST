@@ -2255,6 +2255,8 @@
       const allOn = group.devices.every(d => visibility[d.key]);
       group.devices.forEach(d => { visibility[d.key] = !allOn; });
       render();
+      // 親トグルで表示にした時だけ、その端末の全軌跡が収まるようフォーカスする（非表示にした時は動かさない）
+      if (!allOn) focusVisibleTracksInGroup(group);
     }
     function toggleGroupExpand(gi) {
       groupExpanded[gi] = !groupExpanded[gi];
