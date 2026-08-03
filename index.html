@@ -2145,9 +2145,10 @@
       });
       updatePolylines();
       updateSidebar();
-      // GPX軌跡を全部非表示にした際、GPX側の吹き出しが表示されたまま残らないようにする
-      // （境界ポリゴンを能動的にホバー中でなければ消してよい）
-      if (!anyTrackVisible() && !_balloonLocked) hideBalloon();
+      // GPXマーカーをホバー中に、そのマーカーが非表示化で地図から消えることがある。
+      // マウスは動いていないためmouseoutが発火せず_balloonLockedがtrueのまま固まってしまい、
+      // それ以降ずっとホバーが反応しなくなるため、軌跡が1本も無くなった時点で強制的に解除する
+      if (!anyTrackVisible()) hideBalloon();
     }
 
     // ===== サイドバー更新 =====
