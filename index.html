@@ -2145,6 +2145,9 @@
       });
       updatePolylines();
       updateSidebar();
+      // GPX軌跡を全部非表示にした際、GPX側の吹き出しが表示されたまま残らないようにする
+      // （境界ポリゴンを能動的にホバー中でなければ消してよい）
+      if (!anyTrackVisible() && !_balloonLocked) hideBalloon();
     }
 
     // ===== サイドバー更新 =====
@@ -4016,6 +4019,9 @@
 
     function doHoverSearch(e) {
       if (_balloonLocked) return;
+      // 表示中のGPX軌跡が無ければ探すものが無いので何もしない（hideBalloon()を呼ぶと、
+      // 境界ポリゴン側が表示した町字名の吹き出しを毎フレーム消してしまう競合が起きるため）
+      if (!anyTrackVisible()) return;
       if (map.getZoom() < MIN_ZOOM_HOVER) { hideBalloon(); return; }
 
       const mp = e.containerPoint;
