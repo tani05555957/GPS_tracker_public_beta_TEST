@@ -3355,6 +3355,12 @@
       return boundaryStyleFor(String(feature?.properties?.KEY_CODE || feature?.properties?.KEYCODE || '').trim());
     }
 
+    // 表示中（トグルON）のGPX軌跡が1本でもあるか。境界ポリゴンの町字名ホバーとGPX軌跡ホバーが
+    // 競合しないよう、GPXが1本でも表示されていればGPX側の吹き出しを優先し、町字名側は出さない
+    function anyTrackVisible() {
+      return DEVICES.some(d => visibility[d.key]);
+    }
+
     // 市区町村単位のGeoJSONレイヤーを構築する（境界ZIP読み込み時・セーブデータ復元時の両方から呼ばれる共通処理）
     function buildCityGeoJSONLayer(features) {
       const layer = L.geoJSON({ type: 'FeatureCollection', features }, {
@@ -3370,10 +3376,14 @@
           };
           if (label) {
             lyr.on('mouseover', e => {
+              if (anyTrackVisible()) return;
               _balloonLocked = true;
               showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
             });
-            lyr.on('mousemove', e => showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true));
+            lyr.on('mousemove', e => {
+              if (anyTrackVisible()) return;
+              showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
+            });
             lyr.on('mouseout', hideBalloon);
           }
           lyr.on('mouseover', () => lyr.setStyle({ fillOpacity: Math.min(1, cityFillOpacity + 0.25), weight: 2.5 }));
@@ -3758,10 +3768,14 @@
             };
             if (label) {
               lyr.on('mouseover', e => {
+                if (anyTrackVisible()) return;
                 _balloonLocked = true;
                 showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
               });
-              lyr.on('mousemove', e => showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true));
+              lyr.on('mousemove', e => {
+                if (anyTrackVisible()) return;
+                showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
+              });
               lyr.on('mouseout', hideBalloon);
             }
             lyr.on('mouseover', () => lyr.setStyle({ fillOpacity: Math.min(1, fillOp + 0.25), weight: 2.5 }));
