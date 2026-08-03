@@ -1996,6 +1996,12 @@
 
     // ===== レイヤー管理 =====
     const canvasRenderer = L.canvas({ padding: 0.5 });
+    // GPX軌跡のポリラインはネイティブのホバー判定を使わず、独自のdoHoverSearchで扱っている。
+    // このrendererのcanvas要素はデフォルトでpointer-eventsを受け取ってしまい、一度でも軌跡を
+    // 表示するとそのcanvas（overlayPane、z-index 400）がboundaryPane（z-index 350）より前面に
+    // 居座り続け、軌跡を全部非表示にしても境界ポリゴンのホバーがそれ以降ずっと反応しなくなる
+    // 問題があったため、pointer-eventsを無効化して下層（境界ポリゴン等）に通す
+    canvasRenderer.on('add', () => { canvasRenderer._container.style.pointerEvents = 'none'; });
 
     function clearMapLayers() {
       Object.values(speedPolylines).forEach(polys => polys.forEach(p => { if (map.hasLayer(p)) map.removeLayer(p); }));
