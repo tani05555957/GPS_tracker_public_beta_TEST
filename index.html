@@ -1434,9 +1434,12 @@
     let cityCodes = {};        // key → 市区町村コード（ソート用）
     let cityNames = {};        // key → 市区町村名（表示用）
     let cityPrefCodes = {};    // key → 都道府県コード（2桁）
+    let cityTownCodes = {};    // key → 町丁目KEY_CODE配列（このキーが存在する＝ジオメトリ取得済みの判定にも使う）
+    let cityLoadingKeys = new Set(); // ジオメトリ取得中の市区町村key（一覧のローディング表示・多重fetch防止用）
     let cityFilterText = '';
-    let loadedPrefCodes = new Set(); // 読み込み済み都道府県コード
+    let loadedPrefCodes = new Set(); // 読み込み済み都道府県コード（市区町村一覧＝indexのみ読み込み済みの場合を含む）
     let autoPrefCodes = new Set();   // 住所コード読込により自動取得された都道府県コード（住所コード解除に連動して自動解除する）
+    let fullyFetchedPrefCodes = new Set(); // 県内全市区町村のジオメトリまで取得済みの都道府県コード（住所コードCSVの照合に必要な範囲の判定に使う）
     let boundaryFeatureCount = 0;    // 読み込み済み全フィーチャ数
 
     // 境界設定ペインの表示段階（都道府県→市区町村→町丁目の3段階を1つのペインで切り替える）
@@ -2699,143 +2702,189 @@
       }
     });
 
-    // ===== 境界データ（簡略化済みGeoJSON、GitHub Pagesから都道府県ごとにfetch） =====
-    // 配置規約: アプリ(index.html)と同じ場所に boundaries/<都道府県コード2桁>.geojson を置く
-    // （操作マニュアル.pdfをアプリと同じ場所に置く既存の規約と同じ考え方）
-    function boundaryGeoJSONUrl(prefCode) {
-      return `boundaries/${prefCode}.geojson`;
+    // ===== 境界データ（簡略化済みGeoJSON、都道府県→市区町村単位に分割してGitHub Pagesからfetch） =====
+    // 配置規約: アプリ(index.html)と同じ場所に
+    //   boundaries/<都道府県コード2桁>/index.json          … その県の市区町村一覧（コード・名称・世帯数のみ、ジオメトリなし）
+    //   boundaries/<都道府県コード2桁>/<市区町村コード>.geojson … 個々の市区町村のポリゴン
+    // を置く（操作マニュアル.pdfをアプリと同じ場所に置く既存の規約と同じ考え方）。
+    // 県単位ではなく市区町村単位に分割しているのは、県全体（最大10MB超）を毎回まとめて取得すると
+    // 住所データが多い環境で表示が重くなるため。一覧表示に必要な名称・世帯数は軽量なindex.jsonだけで揃い、
+    // 実際のポリゴン（ジオメトリ）は市区町村トグルをONにした時だけ個別に取得する（ensureCityGeometry参照）。
+    function boundaryIndexUrl(prefCode) {
+      return `boundaries/${prefCode}/index.json`;
+    }
+    function boundaryCityGeoJSONUrl(prefCode, cityCode) {
+      return `boundaries/${prefCode}/${cityCode}.geojson`;
     }
 
-    async function fetchBoundaryGeoJSON(prefCode) {
-      const res = await fetch(boundaryGeoJSONUrl(prefCode));
+    async function fetchBoundaryIndex(prefCode) {
+      const res = await fetch(boundaryIndexUrl(prefCode));
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.text();
+      return await res.json();
     }
 
-    // 都道府県コードを指定して境界データを取得・読込する共通処理。
+    async function fetchCityGeoJSON(prefCode, cityCode) {
+      const res = await fetch(boundaryCityGeoJSONUrl(prefCode, cityCode));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    }
+
+    // 都道府県コードを指定して境界データ（市区町村一覧のみ、ジオメトリなし）を取得・読込する共通処理。
     // 取得失敗（オフライン・ファイル未配置等）はここでalertし、読込処理自体は呼び出し元に例外を投げない
     // （CSV自動読込時にループの途中で止まらないようにするため）。
+    // opts.auto: 住所コードCSV由来の自動読込。CSVは市区町村トグルを介さず任意の住所コードを直接照合するため、
+    //            この場合だけ県内全市区町村のジオメトリもこの時点でまとめて取得しておく（そうしないと
+    //            トグルONにしていない市区町村の住所コードが一切照合できなくなってしまうため）。
     async function loadPrefectureByCode(prefCode, opts = {}) {
-      let text;
-      try {
-        text = await fetchBoundaryGeoJSON(prefCode);
-      } catch (e) {
-        console.error(e);
-        if (location.protocol === 'file:') {
-          alert(`${PREF_NAMES[prefCode] || prefCode}の境界データ取得に失敗しました。\nこのファイルをローカルで直接開いているため取得できません（ブラウザの仕様上の制限）。GitHub PagesのURL（https://...）からアクセスしてください。`);
-        } else {
-          alert(`${PREF_NAMES[prefCode] || prefCode}の境界データ取得に失敗しました。\nインターネット接続、またはGitHub Pages側のファイル配置(boundaries/${prefCode}.geojson)を確認してください。`);
-        }
-        return;
-      }
-      await loadBoundaryFromGeoJSONText(text, opts);
-    }
-
-    async function loadBoundaryFromGeoJSONText(text, opts = {}) {
-      try {
-        const geojson = JSON.parse(text);
-        if (!geojson.features?.length) throw new Error('フィーチャが見つかりませんでした');
-
-        // KEY_CODEインデックス構築（CSVマッチング用、KEY_CODEは全国一意なので追加するだけでよい）
-        // 併せて町丁目単位の世帯数(SETAI)も集計しておく（メッシュを介さず境界shapefileのプロパティから直接取得できる）
-        geojson.features.forEach(f => {
-          const code = String(f.properties?.KEY_CODE || f.properties?.KEYCODE || '').trim();
-          if (code) {
-            if (!allFeaturesByCode[code]) allFeaturesByCode[code] = [];
-            allFeaturesByCode[code].push(f);
-            townSetaiByCode[code] = (townSetaiByCode[code] || 0) + (parseInt(f.properties?.SETAI, 10) || 0);
+      // 一覧（index）は県単位で1回取得すれば十分。既に読み込み済みならここは再取得しない
+      // （手動で読み込んだ県をCSV自動読込がここで再度loadBoundaryIndexしてしまうと、
+      // opts.autoによりautoPrefCodesへ誤って追加され「手動選択した県は住所コード解除で
+      // 自動解除しない」という既存仕様が崩れるため、意図的にスキップしている）
+      if (!loadedPrefCodes.has(prefCode)) {
+        let index;
+        try {
+          index = await fetchBoundaryIndex(prefCode);
+        } catch (e) {
+          console.error(e);
+          if (location.protocol === 'file:') {
+            alert(`${PREF_NAMES[prefCode] || prefCode}の境界データ取得に失敗しました。\nこのファイルをローカルで直接開いているため取得できません（ブラウザの仕様上の制限）。GitHub PagesのURL（https://...）からアクセスしてください。`);
+          } else {
+            alert(`${PREF_NAMES[prefCode] || prefCode}の境界データ取得に失敗しました。\nインターネット接続、またはGitHub Pages側のファイル配置(boundaries/${prefCode}/index.json)を確認してください。`);
           }
-        });
-
-        // 市区町村ごとにグルーピング（都道府県+市区町村コードをキーにして複数県の同名市区町村衝突を防ぐ）
-        const cityFeatMap = {};
-        const touchedPrefCodes = new Set();
-        geojson.features.forEach(f => {
-          const p = f.properties || {};
-          const city = p.CITY_NAME || p.name || '不明';
-          const prefCode = p.PREF != null ? String(p.PREF).padStart(2, '0') : String(p.KEY_CODE || '').slice(0, 2);
-          const cityCode = (p.PREF != null && p.CITY != null)
-            ? (prefCode + String(p.CITY).padStart(3, '0'))
-            : String(p.KEY_CODE || '').slice(0, 5);
-          const key = cityCode || `${prefCode || '??'}_${city}`;
-          if (!cityFeatMap[key]) cityFeatMap[key] = { city, prefCode, code: cityCode || key, features: [] };
-          cityFeatMap[key].features.push(f);
-          if (prefCode) { loadedPrefCodes.add(prefCode); touchedPrefCodes.add(prefCode); }
-
-          // メッシュ配布率推定（境界設定モード）で町丁目→市区町村へロールアップするためのマッピング
-          const townCode = String(p.KEY_CODE || p.KEYCODE || '').trim();
-          if (townCode) cityKeyByTownCode[townCode] = key;
-        });
-
-        // 住所コード自動取得(auto)か、ユーザーによる手動選択かを記録する
-        // （手動で選んだ都道府県は、後で住所コードを解除しても自動解除の対象にしない）
-        touchedPrefCodes.forEach(pc => {
-          if (opts.auto) autoPrefCodes.add(pc); else autoPrefCodes.delete(pc);
-        });
-
-        if (boundaryFeatureCount === 0) {
-          // 初回読み込み時のみ塗り濃度をリセット
-          cityFillOpacity = 0.40;
-          const slider = document.getElementById('fillOpacitySlider');
-          if (slider) { slider.value = 40; document.getElementById('fillOpacityVal').textContent = '40%'; }
+          return;
         }
 
-        Object.entries(cityFeatMap).forEach(([key, entry]) => {
-          const { city, prefCode, code, features } = entry;
-          cityNames[key] = city;
-          cityCodes[key] = code;
-          cityPrefCodes[key] = prefCode;
-          citySetai[key] = features.reduce((s, f) => s + (parseInt(f.properties?.SETAI, 10) || 0), 0);
-
-          // 同じ市区町村キーを再読み込みした場合は古いレイヤーを差し替える
-          if (cityGroups[key] && map.hasLayer(cityGroups[key])) map.removeLayer(cityGroups[key]);
-
-          // 境界線は読み込み直後に自動表示せず、既定は非表示にする（必要な市区町村だけユーザーが個別にONにする）
-          const layer = buildCityGeoJSONLayer(features);
-          cityGroups[key] = layer;
-          if (!(key in cityVisibility)) cityVisibility[key] = false;
-        });
-
-        boundaryFeatureCount += geojson.features.length;
-
-        if (csvMode) {
-          // CSVモード: 市区町村リストは表示せず町丁目フィルタを適用
-          applyCSVFilter();
-        } else {
-          document.getElementById('cityCount').textContent = `${Object.keys(cityGroups).length}市区町村`;
-          cityFilterText = '';
-          document.getElementById('cityFilterInput').value = '';
-          updateCityList();
+        try {
+          loadBoundaryIndex(prefCode, index, opts);
+        } catch (e) {
+          console.error(e);
+          alert(`境界データの読み込みに失敗しました。\n${e.message}`);
+          return;
         }
+      }
 
-        // 境界データが読み込まれたので、集計に関わるコントロール類を表示する
-        document.getElementById('restDurationRow').style.display = '';
-        document.getElementById('secPerUnitRow').style.display = '';
-        document.getElementById('transitSpeedRow').style.display = '';
-
-        // 境界データ読込でポリゴン形状が変わるため空間インデックスを再構築し、点群集計を自動的に再計算する
+      if (opts.auto) {
+        // 住所コードCSVは市区町村トグルを介さず任意の住所コードを直接照合するため、県内全市区町村の
+        // ジオメトリが必要。既にensureCityGeometryで取得済みの市区町村はそこでスキップされる
+        const keysInPref = Object.keys(cityNames).filter(k => cityPrefCodes[k] === prefCode);
+        let processed = 0;
+        for (const key of keysInPref) {
+          try { await ensureCityGeometry(key); } catch (e) { console.error(e); }
+          processed++;
+          if (processed % 5 === 0) await yieldToUI();
+        }
+        fullyFetchedPrefCodes.add(prefCode);
         buildTownSpatialIndex();
         computeVisitEstimates();
-      } catch (e) {
-        console.error(e);
-        alert(`境界データの読み込みに失敗しました。\n${e.message}`);
       }
+    }
+
+    // 都道府県indexの内容をcityNames等の一覧状態へマージする（ジオメトリを含まない軽量データ）
+    function loadBoundaryIndex(prefCode, index, opts = {}) {
+      const cities = Array.isArray(index) ? index : index.cities;
+      if (!cities?.length) throw new Error('市区町村一覧が見つかりませんでした');
+
+      if (boundaryFeatureCount === 0) {
+        // 初回読み込み時のみ塗り濃度をリセット
+        cityFillOpacity = 0.40;
+        const slider = document.getElementById('fillOpacitySlider');
+        if (slider) { slider.value = 40; document.getElementById('fillOpacityVal').textContent = '40%'; }
+      }
+
+      cities.forEach(c => {
+        const key = c.key || c.code;
+        cityNames[key] = c.name;
+        cityCodes[key] = c.code;
+        cityPrefCodes[key] = c.prefCode || prefCode;
+        citySetai[key] = c.setai || 0;
+        if (!(key in cityVisibility)) cityVisibility[key] = false;
+      });
+
+      loadedPrefCodes.add(prefCode);
+      if (opts.auto) autoPrefCodes.add(prefCode); else autoPrefCodes.delete(prefCode);
+
+      if (csvMode) {
+        // CSVモード: 市区町村リストは表示せず町丁目フィルタを適用
+        applyCSVFilter();
+      } else {
+        cityFilterText = '';
+        document.getElementById('cityFilterInput').value = '';
+        updateCityList();
+      }
+
+      // 境界データ（一覧）が読み込まれたので、集計に関わるコントロール類を表示する
+      document.getElementById('restDurationRow').style.display = '';
+      document.getElementById('secPerUnitRow').style.display = '';
+      document.getElementById('transitSpeedRow').style.display = '';
+    }
+
+    // 指定した市区町村keyのジオメトリ（allFeaturesByCode等）を取得する。取得済みなら何もしない
+    // （cityTownCodes[key]の有無を取得済み判定に使う。一度取得したらセッション中はキャッシュし続け、
+    // トグルOFF→ONを繰り返しても再fetchしない）。空間インデックス・集計の再構築は呼び出し側の責任
+    // （複数市区町村をまとめて取得する場合に、都度の再構築で重複コストがかからないようにするため）。
+    async function ensureCityGeometry(key) {
+      if (cityTownCodes[key]) return;
+      const prefCode = cityPrefCodes[key];
+      const code = cityCodes[key];
+      if (!prefCode || !code) return;
+
+      const geojson = await fetchCityGeoJSON(prefCode, code);
+      const townCodes = [];
+      (geojson.features || []).forEach(f => {
+        const townCode = String(f.properties?.KEY_CODE || f.properties?.KEYCODE || '').trim();
+        if (!townCode) return;
+        (allFeaturesByCode[townCode] || (allFeaturesByCode[townCode] = [])).push(f);
+        townSetaiByCode[townCode] = (townSetaiByCode[townCode] || 0) + (parseInt(f.properties?.SETAI, 10) || 0);
+        cityKeyByTownCode[townCode] = key;
+        townCodes.push(townCode);
+      });
+      cityTownCodes[key] = townCodes;
+      boundaryFeatureCount += (geojson.features || []).length;
+    }
+
+    // 市区町村keyのLeafletレイヤーを返す（未構築なら、必要に応じてジオメトリ取得も行った上で構築しキャッシュする）。
+    // 市区町村トグルをONにした時だけ呼ばれ、非表示のままの市区町村では構築されない
+    // （＝重いPathオブジェクト・イベント登録・ネットワーク取得のいずれも発生しない、が①③の要）。
+    async function ensureCityLayer(key) {
+      if (cityGroups[key]) return cityGroups[key];
+
+      const isNewFetch = !cityTownCodes[key];
+      if (isNewFetch) { cityLoadingKeys.add(key); updateCityList(); }
+      try {
+        await ensureCityGeometry(key);
+      } finally {
+        if (isNewFetch) cityLoadingKeys.delete(key);
+      }
+      if (isNewFetch) {
+        // 新規に取得したジオメトリ分だけ空間インデックス・GPS集計を更新する
+        buildTownSpatialIndex();
+        computeVisitEstimates();
+      }
+
+      const townCodes = cityTownCodes[key] || [];
+      const features = [];
+      townCodes.forEach(tc => { const f = allFeaturesByCode[tc]; if (f) features.push(...f); });
+      const layer = buildCityGeoJSONLayer(features);
+      cityGroups[key] = layer;
+      return layer;
     }
 
     // 指定した都道府県コード群の境界データ（市区町村レイヤー・町丁目インデックス等）だけを取り除く。
     // 住所コード解除時の自動読込データのクリーンアップ、および都道府県選択モーダルでのチェック解除による
     // 個別解除の両方から呼ばれる純粋なデータ操作（表示更新は呼び出し側の責任）。
     function unloadPrefectures(prefCodesToRemove) {
-      Object.keys(cityGroups).forEach(key => {
+      Object.keys(cityNames).forEach(key => {
         if (!prefCodesToRemove.has(cityPrefCodes[key])) return;
         const g = cityGroups[key];
-        if (map.hasLayer(g)) map.removeLayer(g);
+        if (g && map.hasLayer(g)) map.removeLayer(g);
         delete cityGroups[key];
         delete cityVisibility[key];
         delete citySetai[key];
         delete cityCodes[key];
         delete cityNames[key];
         delete cityPrefCodes[key];
+        delete cityTownCodes[key];
+        cityLoadingKeys.delete(key);
       });
 
       Object.keys(allFeaturesByCode).forEach(code => {
@@ -2848,6 +2897,7 @@
       prefCodesToRemove.forEach(pc => {
         loadedPrefCodes.delete(pc);
         autoPrefCodes.delete(pc);
+        fullyFetchedPrefCodes.delete(pc);
       });
 
       boundaryFeatureCount = Object.values(allFeaturesByCode).reduce((s, arr) => s + arr.length, 0);
@@ -2918,11 +2968,11 @@
 
     function updateCityList() {
       const showStats = boundaryFeatureCount > 0;
-      document.getElementById('cityCount').textContent = `${Object.keys(cityGroups).length}市区町村`;
+      document.getElementById('cityCount').textContent = `${Object.keys(cityNames).length}市区町村`;
 
       const q = cityFilterText.toLowerCase().replace(/\s+/g, '');
       const showPref = loadedPrefCodes.size > 1;
-      const matched = Object.keys(cityGroups)
+      const matched = Object.keys(cityNames)
         .filter(key => cityMatchesFilter(key, q))
         .map(key => {
           const prefNameFull = PREF_NAMES[cityPrefCodes[key]] || '';
@@ -2945,17 +2995,18 @@
       el.innerHTML = '';
       matched.forEach(({ key, label }) => {
         const on = cityVisibility[key];
+        const loading = cityLoadingKeys.has(key);
         const setai = citySetai[key] || 0;
         const row = document.createElement('div');
         row.className = 'city-row';
 
         const tog = document.createElement('div');
         tog.className = 'city-toggle' + (on ? ' on' : '');
-        tog.addEventListener('click', () => toggleCity(key, !cityVisibility[key]));
+        if (!loading) tog.addEventListener('click', () => toggleCity(key, !cityVisibility[key]));
 
         const nm = document.createElement('span');
         nm.className = 'city-name';
-        nm.textContent = label;
+        nm.textContent = (loading ? '⏳ ' : '') + label;
 
         const ct = document.createElement('span');
         ct.className = 'city-stat';
@@ -3000,7 +3051,7 @@
       const countAtCurrent = boundaryLevel === 'pref'
         ? prefSelected.size
         : boundaryLevel === 'city'
-          ? Object.keys(cityGroups).filter(k => cityVisibility[k]).length
+          ? Object.keys(cityVisibility).filter(k => cityVisibility[k]).length
           : 0;
       const enabledFor = i => i !== idx && (i < idx || (i === idx + 1 && countAtCurrent >= 1));
 
@@ -3042,15 +3093,17 @@
       renderPrefStage();
     }
 
-    // 市区町村トグル表示段階へ入る（cityGroupsは既に選択中の都道府県分だけになっている前提）。
+    // 市区町村トグル表示段階へ入る（cityNamesは既に選択中の都道府県分だけになっている前提）。
     // 都道府県トグル表示段階で外した分も含め、cityVisibilityの状態通りに地図上のレイヤーを揃え直す
-    function enterCityStage() {
+    // （表示ONの市区町村は、まだジオメトリ未取得ならここで取得される＝③の遅延fetchの効果が出る場所）
+    async function enterCityStage() {
       boundaryLevel = 'city';
       document.getElementById('boundarySectionTitle').textContent = '境界設定（市区町村）';
       document.getElementById('cityFilterInput').placeholder = '市区町村で絞り込み';
       cityFilterText = '';
       document.getElementById('cityFilterInput').value = '';
-      showCityLayersPerVisibility();
+      updateCityList();
+      await showCityLayersPerVisibility();
       updateCityList();
     }
 
@@ -3058,10 +3111,19 @@
       Object.values(cityGroups).forEach(g => { if (map.hasLayer(g)) map.removeLayer(g); });
     }
 
-    function showCityLayersPerVisibility() {
-      Object.entries(cityGroups).forEach(([key, g]) => {
-        if (cityVisibility[key] && !map.hasLayer(g)) g.addTo(map);
-      });
+    // cityVisibility[key]===trueの市区町村を地図上に揃える。未構築（未fetch）ならensureCityLayerが
+    // ジオメトリ取得＋レイヤー構築を行う（①③）。表示中のupdateCityListはensureCityLayer内部で
+    // ローディング表示のために呼ばれるため、ここでは完了を待つだけでよい
+    async function showCityLayersPerVisibility() {
+      const keys = Object.keys(cityNames).filter(key => cityVisibility[key]);
+      for (const key of keys) {
+        try {
+          const g = await ensureCityLayer(key);
+          if (!map.hasLayer(g)) g.addTo(map);
+        } catch (e) {
+          console.error(e);
+        }
+      }
     }
 
     // 都道府県トグルで選択中の都道府県だけを読み込み、市区町村トグル表示段階へ進む
@@ -3090,7 +3152,7 @@
         }
       }
 
-      enterCityStage();
+      await enterCityStage();
     }
 
     // 市区町村または町丁目トグル表示段階から、都道府県トグル表示段階へ戻る
@@ -3121,16 +3183,16 @@
     }
 
     // 町丁目トグル表示段階から、市区町村トグル表示段階へ戻る
-    function backToCityStageFromTown() {
+    async function backToCityStageFromTown() {
       teardownTownStage();
-      enterCityStage();
+      await enterCityStage();
       computeVisitEstimates();
     }
 
     // 表示中（トグルON）の市区町村から町丁目一覧を組み立て、町丁目トグル表示段階へ進む
     // （5市区町村以上を対象にすると表示が重くなるため事前に確認する）
     async function advanceToTownStage() {
-      const visibleKeys = Object.keys(cityGroups).filter(key => cityVisibility[key]);
+      const visibleKeys = Object.keys(cityVisibility).filter(key => cityVisibility[key]);
       if (!visibleKeys.length) return;
       if (visibleKeys.length >= 5 &&
         !confirm(`選択した${visibleKeys.length}件の市区町村をすべて表示すると、表示が重くなる可能性があります。続行しますか？`)) return;
@@ -3179,32 +3241,66 @@
       computeVisitEstimates();
     }
 
-    function toggleCity(key, show) {
+    // 表示ONにする時だけジオメトリ取得が発生しうる（ensureCityLayer、①③）。取得中の多重クリックは
+    // cityLoadingKeysで防ぐ（updateCityList側でも取得中はトグルのクリックハンドラを外している）
+    async function toggleCity(key, show) {
+      if (cityLoadingKeys.has(key)) return;
       cityVisibility[key] = show;
-      const g = cityGroups[key];
-      if (!g) return;
-      if (show && !map.hasLayer(g)) {
-        g.addTo(map);
-        const b = g.getBounds();
-        if (b.isValid()) map.fitBounds(b, { padding: [40, 40], maxZoom: 17, animate: false });
+      if (show) {
+        let g;
+        try {
+          g = await ensureCityLayer(key);
+        } catch (e) {
+          console.error(e);
+          cityVisibility[key] = false;
+          alert(`${cityNames[key] || key}の境界データ取得に失敗しました。\nインターネット接続を確認してください。`);
+          updateCityList();
+          return;
+        }
+        if (!map.hasLayer(g)) {
+          g.addTo(map);
+          const b = g.getBounds();
+          if (b.isValid()) map.fitBounds(b, { padding: [40, 40], maxZoom: 17, animate: false });
+        }
+      } else {
+        const g = cityGroups[key];
+        if (g && map.hasLayer(g)) map.removeLayer(g);
       }
-      else if (!show && map.hasLayer(g)) map.removeLayer(g);
       updateCityList();
     }
 
     // 「全て表示/全て非表示」は、現在の絞り込み（cityFilterText）に一致する行だけを対象にする
-    // （絞り込みで隠れている市区町村の表示状態は変えない）
-    function bulkCityVisibility(show) {
+    // （絞り込みで隠れている市区町村の表示状態は変えない）。表示ONにする市区町村は順番にジオメトリを
+    // 取得するため（①③）、5件おきにUIへ制御を返してフリーズを防ぐ
+    async function bulkCityVisibility(show) {
       if (boundaryLevel === 'pref') { bulkPrefVisibility(show); return; }
       if (csvMode) { bulkTownVisibility(show); return; }
       const q = cityFilterText.toLowerCase().replace(/\s+/g, '');
-      Object.keys(cityGroups).forEach(key => {
-        if (!cityMatchesFilter(key, q)) return;
-        const g = cityGroups[key];
-        cityVisibility[key] = show;
-        if (show && !map.hasLayer(g)) g.addTo(map);
-        else if (!show && map.hasLayer(g)) map.removeLayer(g);
-      });
+      const keys = Object.keys(cityNames).filter(key => cityMatchesFilter(key, q));
+
+      if (!show) {
+        keys.forEach(key => {
+          cityVisibility[key] = false;
+          const g = cityGroups[key];
+          if (g && map.hasLayer(g)) map.removeLayer(g);
+        });
+        updateCityList();
+        return;
+      }
+
+      let processed = 0;
+      for (const key of keys) {
+        cityVisibility[key] = true;
+        try {
+          const g = await ensureCityLayer(key);
+          if (!map.hasLayer(g)) g.addTo(map);
+        } catch (e) {
+          console.error(e);
+          cityVisibility[key] = false;
+        }
+        processed++;
+        if (processed % 5 === 0) { updateCityList(); await yieldToUI(); }
+      }
       updateCityList();
     }
 
@@ -3371,34 +3467,47 @@
       return DEVICES.some(d => visibility[d.key]);
     }
 
-    // 市区町村単位のGeoJSONレイヤーを構築する（境界ZIP読み込み時・セーブデータ復元時の両方から呼ばれる共通処理）
+    // 境界ポリゴンのホバー吹き出し用詳細テキスト（市区町村/住所コードの町の両方から使う共通ヘルパー）
+    function boundaryFeatureStatDetail(townCode) {
+      if (!rateHeatmapVisible) return '';
+      const stat = townDeliveryStats[townCode];
+      return stat ? `世帯数 ${stat.households.toFixed(0)}｜配布数 ${stat.visits.toFixed(0)}軒｜配布率 ${stat.rate.toFixed(1)}%` : '';
+    }
+
+    // 市区町村単位のGeoJSONレイヤーを構築する（市区町村トグルON時・セーブデータ復元時の両方から呼ばれる共通処理）。
+    // フィーチャ（ポリゴン）1枚ごとにmouseover/mousemove/mouseoutを貼ると、町丁目数が多い市区町村で
+    // イベント登録コスト・メモリが無視できなくなるため、L.geoJSON（FeatureGroup）はホバーイベントを
+    // 子レイヤーからグループへ自動で伝播する（e.layerに実際にホバーしたPathが入る）性質を使い、
+    // レイヤーグループ単位に1組だけリスナーを登録する（②のイベント一括化）
     function buildCityGeoJSONLayer(features) {
       const layer = L.geoJSON({ type: 'FeatureCollection', features }, {
         style: cityFeatureStyle, pane: 'boundaryPane', renderer: boundaryCanvasRenderer,
-        onEachFeature: (feat, lyr) => {
-          const p = feat.properties || {};
-          const label = [p.CITY_NAME, p.S_NAME].filter(Boolean).join(' ') || p.name || '';
+      });
+      const labelOf = p => [p.CITY_NAME, p.S_NAME].filter(Boolean).join(' ') || p.name || '';
+      layer.on('mouseover', e => {
+        const lyr = e.layer;
+        const p = lyr.feature?.properties || {};
+        const label = labelOf(p);
+        if (label && !anyTrackVisible()) {
+          _balloonLocked = true;
           const townCode = String(p.KEY_CODE || p.KEYCODE || '').trim();
-          const statDetail = () => {
-            if (!rateHeatmapVisible) return '';
-            const stat = townDeliveryStats[townCode];
-            return stat ? `世帯数 ${stat.households.toFixed(0)}｜配布数 ${stat.visits.toFixed(0)}軒｜配布率 ${stat.rate.toFixed(1)}%` : '';
-          };
-          if (label) {
-            lyr.on('mouseover', e => {
-              if (anyTrackVisible()) return;
-              _balloonLocked = true;
-              showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
-            });
-            lyr.on('mousemove', e => {
-              if (anyTrackVisible()) return;
-              showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
-            });
-            lyr.on('mouseout', hideBalloon);
-          }
-          lyr.on('mouseover', () => lyr.setStyle({ fillOpacity: Math.min(1, cityFillOpacity + 0.25), weight: 2.5 }));
-          lyr.on('mouseout', () => layer.resetStyle(lyr));
-        },
+          showBalloon(null, label, boundaryFeatureStatDetail(townCode), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
+        }
+        lyr.setStyle({ fillOpacity: Math.min(1, cityFillOpacity + 0.25), weight: 2.5 });
+      });
+      layer.on('mousemove', e => {
+        const lyr = e.layer;
+        const p = lyr.feature?.properties || {};
+        const label = labelOf(p);
+        if (!label || anyTrackVisible()) return;
+        const townCode = String(p.KEY_CODE || p.KEYCODE || '').trim();
+        showBalloon(null, label, boundaryFeatureStatDetail(townCode), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
+      });
+      layer.on('mouseout', e => {
+        const lyr = e.layer;
+        const p = lyr.feature?.properties || {};
+        if (labelOf(p)) hideBalloon();
+        layer.resetStyle(lyr);
       });
       return layer;
     }
@@ -3685,10 +3794,12 @@
         boundaryLevel = 'town';
         townStageFromCSV = true;
 
-        // 住所コードから都道府県コードを判定し、未読込の県があれば境界データを自動取得する
-        // （ユーザーが先に境界データを読み込んでおく必要をなくす。confirm確認は自動処理では出さない）
+        // 住所コードから都道府県コードを判定し、県内全市区町村のジオメトリが未取得なら自動取得する
+        // （ユーザーが先に境界データを読み込んでおく必要をなくす。confirm確認は自動処理では出さない。
+        // 一覧だけ読み込み済み・一部市区町村だけトグルON済みの県も対象に含める必要があるため、
+        // loadedPrefCodesではなくfullyFetchedPrefCodesで判定する）
         const neededPrefCodes = [...new Set(newTowns.map(t => t.code.slice(0, 2)))]
-          .filter(c => /^\d{2}$/.test(c) && !loadedPrefCodes.has(c));
+          .filter(c => /^\d{2}$/.test(c) && !fullyFetchedPrefCodes.has(c));
         for (const prefCode of neededPrefCodes) {
           await loadPrefectureByCode(prefCode, { auto: true });
         }
@@ -3719,12 +3830,12 @@
       }
     }
 
-    function clearCSVReport() {
+    async function clearCSVReport() {
       if (!confirm('住所コードの読み込みをキャンセルしますか？')) return;
 
       teardownTownStage();
-      if (Object.keys(cityGroups).length > 0) {
-        enterCityStage();
+      if (Object.keys(cityNames).length > 0) {
+        await enterCityStage();
       } else {
         enterPrefStage();
       }
@@ -3765,32 +3876,32 @@
         }
         if (!matched.length) continue;
 
+        // buildCityGeoJSONLayerと同様、フィーチャ単位ではなくレイヤーグループ単位でホバーイベントを
+        // 受ける（②のイベント一括化。1町丁目あたりのフィーチャ数は通常少ないが、統一しておく）
         const townStyle = () => boundaryStyleFor(town.code);
         const layer = L.geoJSON({ type: 'FeatureCollection', features: matched }, {
           style: townStyle, pane: 'boundaryPane', renderer: boundaryCanvasRenderer,
-          onEachFeature: (feat, lyr) => {
-            const p = feat.properties || {};
-            const label = [p.CITY_NAME, p.S_NAME].filter(Boolean).join(' ') || p.name || town.townName || '';
-            const statDetail = () => {
-              if (!rateHeatmapVisible) return '';
-              const stat = townDeliveryStats[town.code];
-              return stat ? `世帯数 ${stat.households.toFixed(0)}｜配布数 ${stat.visits.toFixed(0)}軒｜配布率 ${stat.rate.toFixed(1)}%` : '';
-            };
-            if (label) {
-              lyr.on('mouseover', e => {
-                if (anyTrackVisible()) return;
-                _balloonLocked = true;
-                showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
-              });
-              lyr.on('mousemove', e => {
-                if (anyTrackVisible()) return;
-                showBalloon(null, label, statDetail(), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
-              });
-              lyr.on('mouseout', hideBalloon);
-            }
-            lyr.on('mouseover', () => lyr.setStyle({ fillOpacity: Math.min(1, fillOp + 0.25), weight: 2.5 }));
-            lyr.on('mouseout', () => layer.resetStyle(lyr));
-          },
+        });
+        const labelOf = p => [p.CITY_NAME, p.S_NAME].filter(Boolean).join(' ') || p.name || town.townName || '';
+        layer.on('mouseover', e => {
+          const lyr = e.layer;
+          const label = labelOf(lyr.feature?.properties || {});
+          if (label && !anyTrackVisible()) {
+            _balloonLocked = true;
+            showBalloon(null, label, boundaryFeatureStatDetail(town.code), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
+          }
+          lyr.setStyle({ fillOpacity: Math.min(1, fillOp + 0.25), weight: 2.5 });
+        });
+        layer.on('mousemove', e => {
+          const lyr = e.layer;
+          const label = labelOf(lyr.feature?.properties || {});
+          if (!label || anyTrackVisible()) return;
+          showBalloon(null, label, boundaryFeatureStatDetail(town.code), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
+        });
+        layer.on('mouseout', e => {
+          const lyr = e.layer;
+          if (labelOf(lyr.feature?.properties || {})) hideBalloon();
+          layer.resetStyle(lyr);
         });
         townLayers[town.code] = layer;
         if (townVisibility[town.code]) layer.addTo(map);
@@ -4190,7 +4301,7 @@
         document.getElementById('cityFilterInput').placeholder = '市区町村で絞り込み';
         document.getElementById('boundarySectionTitle').textContent = '境界設定（市区町村）';
         boundaryLevel = 'city';
-        showCityLayersPerVisibility();
+        await showCityLayersPerVisibility();
         updateCityList();
       } catch (e) {
         console.error('検索語からの境界データ自動読込に失敗しました:', e);
@@ -4525,12 +4636,14 @@
       Object.values(cityGroups).forEach(g => { if (map.hasLayer(g)) map.removeLayer(g); });
       Object.values(townLayers).forEach(g => { if (map.hasLayer(g)) map.removeLayer(g); });
       cityGroups = {}; cityVisibility = {}; citySetai = {}; cityCodes = {}; cityNames = {}; cityPrefCodes = {};
+      cityTownCodes = {}; cityLoadingKeys = new Set();
       townLayers = {};
       allFeaturesByCode = {};
       cityKeyByTownCode = {};
       townSetaiByCode = {};
       loadedPrefCodes = new Set();
       autoPrefCodes = new Set();
+      fullyFetchedPrefCodes = new Set();
       boundaryFeatureCount = 0;
       cityFilterText = '';
 
@@ -4549,21 +4662,27 @@
     }
 
     // allFeaturesByCode + cityKeyByTownCode から市区町村レイヤーを再構築する
-    // （元のZIPを再パースせず、共有キャッシュから復元した内容だけで完結する）
+    // （元のfetchをやり直さず、共有キャッシュから復元した内容だけで完結する）。
+    // ①と同じく、実際にLeafletレイヤーを構築するのは表示ON（cityVisibility）の市区町村だけにする
+    // （キャッシュにはCSV自動読込等で取得済みの非表示市区町村分も含まれうるため、それらは
+    // cityTownCodesだけ復元しておき、レイヤー自体はユーザーが後でトグルONにした時に構築する）
     async function rebuildCityLayersFromCache() {
       const cityFeatMap = {};
       for (const [townCode, features] of Object.entries(allFeaturesByCode)) {
         const key = cityKeyByTownCode[townCode];
         if (!key) continue;
         (cityFeatMap[key] || (cityFeatMap[key] = [])).push(...features);
+        (cityTownCodes[key] || (cityTownCodes[key] = [])).push(townCode);
       }
       let processed = 0;
       for (const [key, features] of Object.entries(cityFeatMap)) {
-        const layer = buildCityGeoJSONLayer(features);
-        if (!csvMode && cityVisibility[key]) layer.addTo(map);
-        cityGroups[key] = layer;
+        if (!csvMode && cityVisibility[key]) {
+          const layer = buildCityGeoJSONLayer(features);
+          layer.addTo(map);
+          cityGroups[key] = layer;
+        }
         processed++;
-        if (processed % 5 === 0) await yieldToUI();
+        if (processed % 20 === 0) await yieldToUI();
       }
     }
 
@@ -4647,7 +4766,7 @@
               boundaryLevel = 'city';
               document.getElementById('boundarySectionTitle').textContent = '境界設定（市区町村）';
               document.getElementById('cityFilterInput').placeholder = '市区町村で絞り込み';
-              document.getElementById('cityCount').textContent = `${Object.keys(cityGroups).length}市区町村`;
+              document.getElementById('cityCount').textContent = `${Object.keys(cityNames).length}市区町村`;
             }
           }
         }
