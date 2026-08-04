@@ -4030,7 +4030,8 @@
       if (!g) return;
       if (show && !map.hasLayer(g)) {
         g.addTo(map);
-        fitBoundsToVisibleLayers(Object.keys(townLayers).filter(c => townVisibility[c]).map(c => townLayers[c]));
+        const b = g.getBounds();
+        if (b.isValid()) map.fitBounds(b, { padding: [40, 40], maxZoom: 17, animate: false });
       }
       else if (!show && map.hasLayer(g)) map.removeLayer(g);
       updateTownList();
