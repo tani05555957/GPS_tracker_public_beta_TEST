@@ -54,7 +54,7 @@
     #app {
       display: grid;
       grid-template-rows: auto 1fr;
-      grid-template-columns: var(--sidebar-w, 360px) 5px 1fr;
+      grid-template-columns: var(--sidebar-w, 400px) 5px 1fr;
       height: 100vh;
     }
 
@@ -529,7 +529,7 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      height: var(--city-pane-h, 220px);
+      height: var(--city-pane-h, 320px);
       min-height: 60px;
       flex-shrink: 0;
     }
@@ -2125,7 +2125,7 @@
       const size = map.getSize();
       const dx = e.containerPoint.x - size.x / 2;
       const dy = e.containerPoint.y - size.y / 2;
-      const sidebarW = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w')) || 360;
+      const sidebarW = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w')) || 400;
       const gmOffset = 50 + (sidebarW - 180) / (700 - 180) * (300 - 20);
       const worldPx = map.project(e.latlng, zoom).subtract([dx + gmOffset, dy]);
       const c = map.unproject(worldPx, zoom);
@@ -4402,7 +4402,7 @@
       let startX, startW;
       resizer.addEventListener('mousedown', e => {
         startX = e.clientX;
-        startW = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w')) || 360;
+        startW = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w')) || 400;
         resizer.classList.add('dragging');
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
@@ -4430,7 +4430,7 @@
       let startY, startH;
       resizer.addEventListener('mousedown', e => {
         startY = e.clientY;
-        startH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--city-pane-h')) || 220;
+        startH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--city-pane-h')) || 320;
         resizer.classList.add('dragging');
         document.body.style.cursor = 'row-resize';
         document.body.style.userSelect = 'none';
@@ -4607,8 +4607,8 @@
         savedAt: Date.now(),
         mapView: { lat: map.getCenter().lat, lng: map.getCenter().lng, zoom: map.getZoom(), aerialMode },
         ui: {
-          sidebarW: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w')) || 360,
-          cityPaneH: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--city-pane-h')) || 220,
+          sidebarW: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w')) || 400,
+          cityPaneH: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--city-pane-h')) || 320,
           cityFillOpacityPercent: Math.round(cityFillOpacity * 100),
           filterText, cityFilterText, townFilterText, groupExpanded,
           secPerUnit, restExcludeMinutes, transitSpeedKmh,
