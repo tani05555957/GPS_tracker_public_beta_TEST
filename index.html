@@ -3241,6 +3241,22 @@
       computeVisitEstimates();
     }
 
+    // 現在地図上に表示中の全レイヤーの外接範囲にfitBoundsする。新規に1件追加した時に、その1件だけの
+    // 範囲にズームしてしまうと既存の表示分が画面外に押し出され「追加のはずが表示がリセットされた」ように
+    // 見えてしまうため、常にすでに表示中のレイヤーも含めた範囲でフィットする（toggleCity/toggleTown共用）
+    function fitBoundsToVisibleLayers(layers) {
+      let bounds = null;
+      layers.forEach(g => {
+        if (!g || !map.hasLayer(g)) return;
+        const b = g.getBounds();
+        if (!b.isValid()) return;
+        bounds = bounds ? bounds.extend(b) : L.latLngBounds(b.getSouthWest(), b.getNorthEast());
+      });
+      if (bounds && bounds.isValid()) {
+        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 17, animate: false });
+      }
+    }
+
     // 表示ONにする時だけジオメトリ取得が発生しうる（ensureCityLayer、①③）。取得中の多重クリックは
     // cityLoadingKeysで防ぐ（updateCityList側でも取得中はトグルのクリックハンドラを外している）
     async function toggleCity(key, show) {
@@ -3257,11 +3273,8 @@
           updateCityList();
           return;
         }
-        if (!map.hasLayer(g)) {
-          g.addTo(map);
-          const b = g.getBounds();
-          if (b.isValid()) map.fitBounds(b, { padding: [40, 40], maxZoom: 17, animate: false });
-        }
+        if (!map.hasLayer(g)) g.addTo(map);
+        fitBoundsToVisibleLayers(Object.keys(cityGroups).filter(k => cityVisibility[k]).map(k => cityGroups[k]));
       } else {
         const g = cityGroups[key];
         if (g && map.hasLayer(g)) map.removeLayer(g);
@@ -4017,8 +4030,7 @@
       if (!g) return;
       if (show && !map.hasLayer(g)) {
         g.addTo(map);
-        const b = g.getBounds();
-        if (b.isValid()) map.fitBounds(b, { padding: [40, 40], maxZoom: 17, animate: false });
+        fitBoundsToVisibleLayers(Object.keys(townLayers).filter(c => townVisibility[c]).map(c => townLayers[c]));
       }
       else if (!show && map.hasLayer(g)) map.removeLayer(g);
       updateTownList();
