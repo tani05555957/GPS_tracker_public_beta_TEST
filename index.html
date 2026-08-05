@@ -3019,15 +3019,16 @@
 
         if (showStats) {
           const ms = cityDeliveryStats[key];
+          const hasHouseholds = ms && ms.households > 0;
           const vs = document.createElement('span');
           vs.className = 'city-stat';
           vs.title = 'GPS滞在クラスタのポイント・イン・ポリゴン集計による推定配布数';
-          vs.textContent = ms ? ms.visits.toLocaleString() : '—';
+          vs.textContent = hasHouseholds ? ms.visits.toLocaleString() : '—';
 
           const rt = document.createElement('span');
           rt.className = 'city-stat rate';
           rt.title = 'GPS滞在クラスタのポイント・イン・ポリゴン集計による推定配布数の、配布数(実績)に対する割合';
-          rt.textContent = ms ? ms.rate.toFixed(1) + '%' : '—';
+          rt.textContent = hasHouseholds ? ms.rate.toFixed(1) + '%' : '—';
 
           row.appendChild(vs);
           row.appendChild(rt);
@@ -3462,12 +3463,26 @@
     function boundaryStyleFor(code) {
       if (rateHeatmapVisible && boundaryFeatureCount > 0) {
         const stat = townDeliveryStats[code];
+        const hasHouseholds = stat && stat.households > 0;
+        // 統計上世帯数が0（データなし）の町丁目は按分・実績との比較が成立しないため、
+        // ヒートマップ色を付けず完全に透明にする（黄色だと配布率50%前後に見えてしまうため）
         return {
-          fillColor: stat ? rateFillColor(stat.rate) : '#dddddd',
-          fillOpacity: cityFillOpacity, color: '#DBC900', weight: 1.5, opacity: 0.9,
+          fillColor: hasHouseholds ? rateFillColor(stat.rate) : '#FFFBBB',
+          fillOpacity: hasHouseholds ? cityFillOpacity : 0,
+          color: '#DBC900', weight: 1.5, opacity: 0.9,
         };
       }
       return { fillColor: '#FFFBBB', fillOpacity: cityFillOpacity, color: '#DBC900', weight: 1.5, opacity: 0.9 };
+    }
+
+    // 境界ポリゴンのホバー時の塗り不透明度。配布率モードで統計上世帯数0（データなし）の
+    // 町丁目は、ホバーで強調表示しても黄色が見えてしまわないよう透明のまま維持する
+    function boundaryHoverFillOpacity(code) {
+      if (rateHeatmapVisible && boundaryFeatureCount > 0) {
+        const stat = townDeliveryStats[code];
+        if (!(stat && stat.households > 0)) return 0;
+      }
+      return Math.min(1, cityFillOpacity + 0.25);
     }
 
     function cityFeatureStyle(feature) {
@@ -3501,12 +3516,12 @@
         const lyr = e.layer;
         const p = lyr.feature?.properties || {};
         const label = labelOf(p);
+        const townCode = String(p.KEY_CODE || p.KEYCODE || '').trim();
         if (label && !anyTrackVisible()) {
           _balloonLocked = true;
-          const townCode = String(p.KEY_CODE || p.KEYCODE || '').trim();
           showBalloon(null, label, boundaryFeatureStatDetail(townCode), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
         }
-        lyr.setStyle({ fillOpacity: Math.min(1, cityFillOpacity + 0.25), weight: 2.5 });
+        lyr.setStyle({ fillOpacity: boundaryHoverFillOpacity(townCode), weight: 2.5 });
       });
       layer.on('mousemove', e => {
         const lyr = e.layer;
@@ -3868,7 +3883,6 @@
     async function applyCSVFilter() {
       const myGen = ++csvFilterGeneration;
 
-      const fillOp = cityFillOpacity;
       // あいまい一致（桁のずれ吸収）が必要な場合だけのフォールバック用。ループの外で1回だけ作る
       // （町丁目ごとに全件を作り直すと件数の掛け算で著しく遅くなるため）
       const allEntries = Object.entries(allFeaturesByCode);
@@ -3903,7 +3917,7 @@
             _balloonLocked = true;
             showBalloon(null, label, boundaryFeatureStatDetail(town.code), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
           }
-          lyr.setStyle({ fillOpacity: Math.min(1, fillOp + 0.25), weight: 2.5 });
+          lyr.setStyle({ fillOpacity: boundaryHoverFillOpacity(town.code), weight: 2.5 });
         });
         layer.on('mousemove', e => {
           const lyr = e.layer;
@@ -3955,9 +3969,11 @@
       const filtered = csvTowns.filter(t => townMatchesFilter(t, q));
 
       if (showStats && Object.keys(townDeliveryStats).length) {
-        // 配布率の低い順（未計算の町丁目は末尾）に並べ替える
+        // 配布率の低い順（未計算・統計上世帯数0の町丁目は末尾）に並べ替える
         filtered.sort((a, b) => {
-          const ra = townDeliveryStats[a.code]?.rate, rb = townDeliveryStats[b.code]?.rate;
+          const sa = townDeliveryStats[a.code], sb = townDeliveryStats[b.code];
+          const ra = (sa && sa.households > 0) ? sa.rate : null;
+          const rb = (sb && sb.households > 0) ? sb.rate : null;
           if (ra == null && rb == null) return 0;
           if (ra == null) return 1;
           if (rb == null) return -1;
@@ -4000,15 +4016,16 @@
         row.appendChild(dl);
 
         if (showStats) {
+          const hasHouseholds = ms && ms.households > 0;
           const vs = document.createElement('span');
           vs.className = 'city-stat';
           vs.title = 'GPS滞在クラスタのポイント・イン・ポリゴン集計による推定配布数';
-          vs.textContent = ms ? ms.visits.toLocaleString() : '—';
+          vs.textContent = hasHouseholds ? ms.visits.toLocaleString() : '—';
 
           const rt = document.createElement('span');
           rt.className = 'city-stat rate';
           rt.title = 'GPS滞在クラスタのポイント・イン・ポリゴン集計による推定配布数の、配布数(実績)に対する割合';
-          rt.textContent = ms ? ms.rate.toFixed(1) + '%' : '—';
+          rt.textContent = hasHouseholds ? ms.rate.toFixed(1) + '%' : '—';
 
           row.appendChild(vs);
           row.appendChild(rt);
