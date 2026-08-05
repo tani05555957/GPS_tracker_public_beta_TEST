@@ -3467,7 +3467,7 @@
         // 統計上世帯数が0（データなし）の町丁目は按分・実績との比較が成立しないため、
         // ヒートマップ色を付けずグレーにする（黄色だと配布率50%前後に見えてしまうため）
         return {
-          fillColor: hasHouseholds ? rateFillColor(stat.rate) : '#333333',
+          fillColor: hasHouseholds ? rateFillColor(stat.rate) : '#1a1a1a',
           fillOpacity: cityFillOpacity, color: '#DBC900', weight: 1.5, opacity: 0.9,
         };
       }
