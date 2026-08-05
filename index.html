@@ -1340,7 +1340,7 @@
           <span id="transitSpeedVal" class="slider-val">10km/h</span>
         </div>
         <button class="header-btn secondary" id="rateHeatmapToggleBtn" style="display:none" onclick="toggleRateHeatmap()"
-          title="町丁目単位の対実績割合ヒートマップの表示/非表示を切り替えます">📊 対実績割合ヒートマップ</button>
+          title="町丁目単位の充足率ヒートマップの表示/非表示を切り替えます">📊 充足率ヒートマップ</button>
         <button class="header-btn secondary" id="saveBtn" onclick="openSaveModal()" title="現在の表示内容をブラウザに保存します" style="margin-left:auto">保存</button>
         <button class="header-btn secondary" id="loadBtn" onclick="openLoadModal()" title="保存した内容を呼び出します">再開</button>
         <a class="header-btn secondary" href="マニュアル.pdf" target="_blank" rel="noopener" style="text-decoration:none"
@@ -2988,7 +2988,7 @@
         '<div class="h-toggle"></div>' +
         '<span class="h-name">市区町村名</span>' +
         '<span class="h-stat">統計上<br>世帯数</span>' +
-        (showStats ? '<span class="h-stat">推定<br>配布数</span><span class="h-stat">対実績<br>割合</span>' : '');
+        (showStats ? '<span class="h-stat">推定<br>配布数</span><span class="h-stat">充足<br>率</span>' : '');
       hdr.style.display = 'flex';
 
       const el = document.getElementById('cityList');
@@ -3465,24 +3465,13 @@
         const stat = townDeliveryStats[code];
         const hasHouseholds = stat && stat.households > 0;
         // 統計上世帯数が0（データなし）の町丁目は按分・実績との比較が成立しないため、
-        // ヒートマップ色を付けず完全に透明にする（黄色だと配布率50%前後に見えてしまうため）
+        // ヒートマップ色を付けずグレーにする（黄色だと配布率50%前後に見えてしまうため）
         return {
-          fillColor: hasHouseholds ? rateFillColor(stat.rate) : '#FFFBBB',
-          fillOpacity: hasHouseholds ? cityFillOpacity : 0,
-          color: '#DBC900', weight: 1.5, opacity: 0.9,
+          fillColor: hasHouseholds ? rateFillColor(stat.rate) : '#bbbbbb',
+          fillOpacity: cityFillOpacity, color: '#DBC900', weight: 1.5, opacity: 0.9,
         };
       }
       return { fillColor: '#FFFBBB', fillOpacity: cityFillOpacity, color: '#DBC900', weight: 1.5, opacity: 0.9 };
-    }
-
-    // 境界ポリゴンのホバー時の塗り不透明度。配布率モードで統計上世帯数0（データなし）の
-    // 町丁目は、ホバーで強調表示しても黄色が見えてしまわないよう透明のまま維持する
-    function boundaryHoverFillOpacity(code) {
-      if (rateHeatmapVisible && boundaryFeatureCount > 0) {
-        const stat = townDeliveryStats[code];
-        if (!(stat && stat.households > 0)) return 0;
-      }
-      return Math.min(1, cityFillOpacity + 0.25);
     }
 
     function cityFeatureStyle(feature) {
@@ -3499,7 +3488,11 @@
     function boundaryFeatureStatDetail(townCode) {
       if (!rateHeatmapVisible) return '';
       const stat = townDeliveryStats[townCode];
-      return stat ? `世帯数 ${stat.households.toFixed(0)}｜配布数 ${stat.visits.toFixed(0)}軒｜配布率 ${stat.rate.toFixed(1)}%` : '';
+      if (!stat) return '';
+      const hasHouseholds = stat.households > 0;
+      const visitsText = hasHouseholds ? `${stat.visits.toFixed(0)}軒` : '－';
+      const rateText = hasHouseholds ? `${stat.rate.toFixed(1)}%` : '－';
+      return `世帯数 ${stat.households.toFixed(0)}｜配布数 ${visitsText}｜充足率 ${rateText}`;
     }
 
     // 市区町村単位のGeoJSONレイヤーを構築する（市区町村トグルON時・セーブデータ復元時の両方から呼ばれる共通処理）。
@@ -3521,7 +3514,7 @@
           _balloonLocked = true;
           showBalloon(null, label, boundaryFeatureStatDetail(townCode), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
         }
-        lyr.setStyle({ fillOpacity: boundaryHoverFillOpacity(townCode), weight: 2.5 });
+        lyr.setStyle({ fillOpacity: Math.min(1, cityFillOpacity + 0.25), weight: 2.5 });
       });
       layer.on('mousemove', e => {
         const lyr = e.layer;
@@ -3917,7 +3910,7 @@
             _balloonLocked = true;
             showBalloon(null, label, boundaryFeatureStatDetail(town.code), e.originalEvent.clientX, e.originalEvent.clientY, 'cursor', true);
           }
-          lyr.setStyle({ fillOpacity: boundaryHoverFillOpacity(town.code), weight: 2.5 });
+          lyr.setStyle({ fillOpacity: Math.min(1, cityFillOpacity + 0.25), weight: 2.5 });
         });
         layer.on('mousemove', e => {
           const lyr = e.layer;
@@ -3952,7 +3945,7 @@
         '<span class="h-name">町丁目名</span>' +
         '<span class="h-stat">統計上<br>世帯数</span>' +
         '<span class="h-stat">配布数<br>(実績)</span>' +
-        (showStats ? '<span class="h-stat">推定<br>配布数</span><span class="h-stat">対実績<br>割合</span>' : '');
+        (showStats ? '<span class="h-stat">推定<br>配布数</span><span class="h-stat">充足<br>率</span>' : '');
       hdr.style.display = 'flex';
 
       if (Object.keys(allFeaturesByCode).length === 0) {
